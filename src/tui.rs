@@ -14,8 +14,8 @@ use ratatui::{
 };
 use std::io;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{ChildStdin, Command};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -23,11 +23,17 @@ use crate::agent::{AgentConfig, AgentStatus};
 
 enum AppMode {
     Normal,
-    Writing(String), // The message being typed
+    Writing(String),
+}
+
+enum AgentMessage {
+    Update(usize, AgentConfig),
+    StdinReady(usize, ChildStdin),
 }
 
 struct App {
     agents: Vec<AgentConfig>,
+    stdin_handles: Vec<Option<ChildStdin>>,
     selected: usize,
     scroll_offset: usize,
     quit: bool,
@@ -48,6 +54,7 @@ impl App {
 
         Self {
             agents,
+            stdin_handles: (0..num_agents).map(|_| None).collect(),
             selected: 0,
             scroll_offset: 0,
             quit: false,
@@ -101,7 +108,7 @@ impl App {
 
     fn enter_write_mode(&mut self) {
         if let Some(agent) = self.agents.get(self.selected) {
-            if agent.status == AgentStatus::Running {
+            if agent.status == AgentStatus::Running && self.stdin_handles[self.selected].is_some() {
                 self.mode = AppMode::Writing(String::new());
             }
         }
@@ -111,12 +118,26 @@ impl App {
         self.mode = AppMode::Normal;
     }
 
+    async fn send_message_to_selected(&mut self, message: &str) -> Result<()> {
+        if let Some(stdin) = self.stdin_handles[self.selected].as_mut() {
+            // Add the message to output for display
+            if let Some(agent) = self.agents.get_mut(self.selected) {
+                agent.add_output(format!("→ You: {}", message));
+            }
+            
+            // Send to opencode's stdin
+            stdin.write_all(message.as_bytes()).await?;
+            stdin.write_all(b"\n").await?;
+            stdin.flush().await?;
+        }
+        Ok(())
+    }
+
     fn get_progress(&self, index: usize) -> f64 {
         if let Some(agent) = self.agents.get(index) {
             match agent.status {
                 AgentStatus::Pending => 0.0,
                 AgentStatus::Running => {
-                    // Estimate progress based on output lines (max 100 lines = 100%)
                     (agent.output.len() as f64 / 100.0).min(0.95)
                 }
                 AgentStatus::Completed => 1.0,
@@ -144,7 +165,7 @@ pub async fn run_tui(num_agents: usize, _workdir: &str) -> Result<()> {
     for (idx, agent) in app.agents.iter().cloned().enumerate() {
         let tx = tx.clone();
         task_set.spawn(async move {
-            (idx, simulate_agent_work(agent, tx).await)
+            simulate_agent_work(idx, agent, tx).await
         });
     }
 
@@ -170,9 +191,10 @@ pub async fn run_tui(num_agents: usize, _workdir: &str) -> Result<()> {
                             KeyCode::Esc => app.exit_write_mode(),
                             KeyCode::Enter => {
                                 let message = input.clone();
-                                // TODO: Send message to selected agent's stdin
-                                if let Some(agent) = app.agents.get_mut(app.selected) {
-                                    agent.add_output(format!("→ You: {}", message));
+                                if let Err(e) = app.send_message_to_selected(&message).await {
+                                    if let Some(agent) = app.agents.get_mut(app.selected) {
+                                        agent.add_output(format!("✗ Failed to send message: {}", e));
+                                    }
                                 }
                                 app.exit_write_mode();
                             }
@@ -189,9 +211,16 @@ pub async fn run_tui(num_agents: usize, _workdir: &str) -> Result<()> {
             }
         }
 
-        while let Ok((idx, updated_agent)) = rx.try_recv() {
-            if let Some(agent) = app.agents.get_mut(idx) {
-                *agent = updated_agent;
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                AgentMessage::Update(idx, updated_agent) => {
+                    if let Some(agent) = app.agents.get_mut(idx) {
+                        *agent = updated_agent;
+                    }
+                }
+                AgentMessage::StdinReady(idx, stdin) => {
+                    app.stdin_handles[idx] = Some(stdin);
+                }
             }
         }
 
@@ -211,9 +240,9 @@ fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),      // Header
-            Constraint::Min(0),          // Main content
-            Constraint::Length(3),       // Footer/Status
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(3),
         ])
         .split(f.area());
 
@@ -308,12 +337,11 @@ fn render_agent_detail(f: &mut Frame, app: &App, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Progress bar
-                Constraint::Min(0),      // Output
+                Constraint::Length(3),
+                Constraint::Min(0),
             ])
             .split(area);
 
-        // Progress gauge
         let progress = app.get_progress(app.selected);
         let gauge_color = match agent.status {
             AgentStatus::Running => Color::Yellow,
@@ -336,7 +364,6 @@ fn render_agent_detail(f: &mut Frame, app: &App, area: Rect) {
 
         f.render_widget(gauge, chunks[0]);
 
-        // Output
         let output_height = chunks[1].height.saturating_sub(2) as usize;
         let output_lines: Vec<Line> = agent
             .output
@@ -421,43 +448,42 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(help, area);
 }
 
-async fn simulate_agent_work(mut agent: AgentConfig, tx: mpsc::Sender<(usize, AgentConfig)>) {
+async fn simulate_agent_work(idx: usize, mut agent: AgentConfig, tx: mpsc::Sender<AgentMessage>) {
     agent.start();
     agent.add_output(format!("🚀 Starting opencode for: {}", agent.task));
     agent.add_output(format!("📦 Model: {} / {}", agent.provider, agent.model));
-    let _ = tx.send((0, agent.clone())).await;
+    let _ = tx.send(AgentMessage::Update(idx, agent.clone())).await;
 
-    // Build opencode command
     let mut cmd = Command::new("opencode");
     cmd.arg("run");
     cmd.arg(&agent.task);
     
-    // Add model flag if specified
     if !agent.model.is_empty() {
         cmd.arg("--model");
         cmd.arg(format!("{}/{}", agent.provider, agent.model));
     }
     
-    // Capture stdout and stderr
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::piped());
     
-    // Spawn the process
     match cmd.spawn() {
         Ok(mut child) => {
-            // Get stdout
+            // Send stdin handle to main thread
+            if let Some(stdin) = child.stdin.take() {
+                let _ = tx.send(AgentMessage::StdinReady(idx, stdin)).await;
+            }
+            
+            // Read stdout
             if let Some(stdout) = child.stdout.take() {
                 let mut stdout_reader = BufReader::new(stdout).lines();
                 
-                // Read stdout line by line
                 while let Ok(Some(line)) = stdout_reader.next_line().await {
                     agent.add_output(line);
-                    let _ = tx.send((0, agent.clone())).await;
+                    let _ = tx.send(AgentMessage::Update(idx, agent.clone())).await;
                 }
             }
             
-            // Wait for process to complete
             match child.wait().await {
                 Ok(status) => {
                     if status.success() {
@@ -480,5 +506,5 @@ async fn simulate_agent_work(mut agent: AgentConfig, tx: mpsc::Sender<(usize, Ag
         }
     }
     
-    let _ = tx.send((0, agent)).await;
+    let _ = tx.send(AgentMessage::Update(idx, agent)).await;
 }
