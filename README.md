@@ -186,13 +186,26 @@ cargo test
 cargo build --release
 ```
 
+## Documentation
+
+For more detailed information, check out the [docs/](docs/) directory:
+
+- **[QUICKSTART.md](docs/QUICKSTART.md)** - 5-minute getting started guide
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Technical architecture deep dive
+- **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines
+- **[PROJECT_SUMMARY.md](docs/PROJECT_SUMMARY.md)** - Complete project overview
+- **[BUILD_COMPLETE.md](docs/BUILD_COMPLETE.md)** - Build success summary
+- **[NEXT_STEPS.md](docs/NEXT_STEPS.md)** - What to do next
+- **[GIT_SETUP.md](docs/GIT_SETUP.md)** - Git workflow guide
+- **[DIAGRAM.txt](docs/DIAGRAM.txt)** - ASCII architecture diagrams
+
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please read [CONTRIBUTING.md](docs/CONTRIBUTING.md) before submitting a Pull Request.
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - see [LICENSE](LICENSE) file for details
 
 ## Acknowledgments
 
