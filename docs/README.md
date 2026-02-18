@@ -6,6 +6,12 @@ Complete documentation for opencode-parallel.
 
 ### Getting Started
 
+- **[UI_PREVIEW.md](UI_PREVIEW.md)** - **See the new enhanced UI!**
+  - Visual preview with colors and progress bars
+  - Keyboard controls guide
+  - Feature showcase
+  - Interactive elements
+
 - **[HOW_IT_WORKS.md](HOW_IT_WORKS.md)** - **START HERE** - Understand the architecture
   - How it wraps opencode CLI
   - Process spawning
