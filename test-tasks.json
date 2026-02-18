@@ -1,0 +1,14 @@
+{
+  "tasks": [
+    {
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet-20241022",
+      "task": "What is 2 + 2?"
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet-20241022", 
+      "task": "Explain what Rust is in one sentence"
+    }
+  ]
+}

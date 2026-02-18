@@ -6,6 +6,12 @@ Complete documentation for opencode-parallel.
 
 ### Getting Started
 
+- **[HOW_IT_WORKS.md](HOW_IT_WORKS.md)** - **START HERE** - Understand the architecture
+  - How it wraps opencode CLI
+  - Process spawning
+  - Output streaming
+  - Why this approach
+
 - **[QUICKSTART.md](QUICKSTART.md)** - Get up and running in 5 minutes
   - Installation
   - First run
