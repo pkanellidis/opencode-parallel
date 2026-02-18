@@ -1,0 +1,294 @@
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                      OPENCODE-PARALLEL ARCHITECTURE                            ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              USER INTERACTION                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                   ┌──────────────────┼──────────────────┐
+                   │                  │                  │
+                   ▼                  ▼                  ▼
+          ┌────────────────┐ ┌────────────────┐ ┌────────────────┐
+          │   TUI Mode     │ │  Batch Mode    │ │  Config Mode   │
+          │   (Default)    │ │   (--run)      │ │   (--auth)     │
+          └────────┬───────┘ └────────┬───────┘ └────────┬───────┘
+                   │                  │                  │
+                   └──────────────────┼──────────────────┘
+                                      │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                CLI LAYER                                     │
+│                                (main.rs)                                     │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                        Command Parser (clap)                          │  │
+│  │  • Argument validation                                                │  │
+│  │  • Subcommand routing                                                 │  │
+│  │  • Help generation                                                    │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                   ┌──────────────────┼──────────────────┐
+                   │                  │                  │
+                   ▼                  ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CORE MODULES                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────────────┐    ┌────────────────────┐    ┌──────────────────┐ │
+│  │    TUI MODULE      │    │  EXECUTOR MODULE   │    │  AGENT MODULE    │ │
+│  │    (tui.rs)        │    │  (executor.rs)     │    │  (agent.rs)      │ │
+│  │                    │    │                    │    │                  │ │
+│  │ • Terminal UI      │◄───┤ • Task Queue       │◄───┤ • State Mgmt     │ │
+│  │ • Event Loop       │    │ • Parallelism      │    │ • Auth Storage   │ │
+│  │ • Rendering        │    │ • Coordination     │    │ • Lifecycle      │ │
+│  │ • Input Handling   │    │ • Progress Track   │    │ • Provider API   │ │
+│  └─────────┬──────────┘    └─────────┬──────────┘    └─────────┬────────┘ │
+│            │                          │                          │          │
+└────────────┼──────────────────────────┼──────────────────────────┼──────────┘
+             │                          │                          │
+             │          ┌───────────────┴──────────────┐          │
+             │          │                               │          │
+             ▼          ▼                               ▼          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ASYNC RUNTIME (Tokio)                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                          Task Pool (JoinSet)                          │  │
+│  │                                                                        │  │
+│  │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌───────────┐  │  │
+│  │   │  Agent 1    │  │  Agent 2    │  │  Agent 3    │  │  Agent N  │  │  │
+│  │   │  ○ Pending  │  │  ◉ Running  │  │  ✓ Complete │  │  ...      │  │  │
+│  │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └─────┬─────┘  │  │
+│  │          │                │                │                │        │  │
+│  └──────────┼────────────────┼────────────────┼────────────────┼────────┘  │
+│             │                │                │                │           │
+│             ▼                ▼                ▼                ▼           │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                    Message Channels (mpsc)                            │  │
+│  │                                                                        │  │
+│  │   Producer (Agents) ────► [Channel] ────► Consumer (TUI/Output)      │  │
+│  │                                                                        │  │
+│  │   • Status Updates                                                    │  │
+│  │   • Output Lines                                                      │  │
+│  │   • Progress Events                                                   │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                   ┌──────────────────┼──────────────────┐
+                   │                  │                  │
+                   ▼                  ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           EXTERNAL INTERFACES                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────────────┐    ┌────────────────────┐    ┌──────────────────┐ │
+│  │   AI PROVIDERS     │    │   FILE SYSTEM      │    │    TERMINAL      │ │
+│  │                    │    │                    │    │                  │ │
+│  │ • Anthropic        │    │ • Config Files     │    │ • Crossterm      │ │
+│  │ • OpenAI           │    │   auth.json        │    │ • ANSI Codes     │ │
+│  │ • Google           │    │   tasks.json       │    │ • Raw Mode       │ │
+│  │ • Local Models     │    │ • Log Files        │    │ • Mouse Input    │ │
+│  └────────────────────┘    └────────────────────┘    └──────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                            DATA FLOW DIAGRAM                                   ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+    User Input
+        │
+        ├─► Keyboard Events ──► TUI Event Handler
+        │                           │
+        │                           ├─► Start Agent ──► Spawn Task
+        │                           │                      │
+        │                           ├─► Cancel Agent ──► Send Signal
+        │                           │                      │
+        │                           └─► Navigate ──► Update Selection
+        │
+        └─► CLI Args ──► Command Parser ──► Module Router
+                                                │
+                                                ├─► TUI Mode
+                                                ├─► Batch Mode
+                                                └─► Config Mode
+
+
+    Agent Execution Flow:
+    
+    ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+    │ Pending  │────►│ Running  │────►│Completed │     │ Failed   │
+    └──────────┘     └────┬─────┘     └──────────┘     └──────────┘
+                          │                                  ▲
+                          │                                  │
+                          └─► Cancel ──────► Cancelled ──────┘
+
+
+    TUI Rendering Loop:
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │                                                              │
+    │  1. Poll Events (100ms timeout)                             │
+    │          │                                                   │
+    │          ▼                                                   │
+    │  2. Process Input                                            │
+    │          │                                                   │
+    │          ▼                                                   │
+    │  3. Update State from Channels                              │
+    │          │                                                   │
+    │          ▼                                                   │
+    │  4. Compute Layout (40% / 60% split)                        │
+    │          │                                                   │
+    │          ▼                                                   │
+    │  5. Render Widgets                                          │
+    │          │                                                   │
+    │          ▼                                                   │
+    │  6. Flush to Terminal                                       │
+    │          │                                                   │
+    │          └──────────────────► Loop (unless quit)            │
+    │                                                              │
+    └─────────────────────────────────────────────────────────────┘
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                          TUI LAYOUT DIAGRAM                                    ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         OpenCode Parallel TUI                                   │
+├────────────────────────────┬────────────────────────────────────────────────────┤
+│                            │                                                    │
+│        Agent List          │              Agent Detail View                     │
+│         (40%)              │                   (60%)                            │
+│                            │                                                    │
+│  ┌──────────────────────┐ │  ┌──────────────────────────────────────────────┐ │
+│  │  ○ Agent 1 (5s)      │ │  │  Agent 2 - Refactor auth module             │ │
+│  │  ◉ Agent 2 (12s) ◄───┼─┼─►│                                              │ │
+│  │  ✓ Agent 3 (8s)      │ │  │  [12:34:56] Starting task...                │ │
+│  │  ✗ Agent 4 (3s)      │ │  │  [12:35:01] Analyzing code structure...     │ │
+│  │  ⊘ Agent 5           │ │  │  [12:35:05] Found 3 functions to refactor   │ │
+│  │  ○ Agent 6           │ │  │  [12:35:08] Applying changes...             │ │
+│  │  ○ Agent 7           │ │  │  [12:35:12] Running tests...                │ │
+│  │  ○ Agent 8           │ │  │  [12:35:15] All tests passing               │ │
+│  │                      │ │  │                                              │ │
+│  │                      │ │  │  Provider: anthropic                         │ │
+│  │                      │ │  │  Model: claude-3-5-sonnet-20241022           │ │
+│  │                      │ │  │  Status: ◉ Running                           │ │
+│  │                      │ │  │  Duration: 12s                               │ │
+│  │                      │ │  │                                              │ │
+│  │                      │ │  │                                              │ │
+│  └──────────────────────┘ │  └──────────────────────────────────────────────┘ │
+│                            │                                                    │
+├────────────────────────────┴────────────────────────────────────────────────────┤
+│  q:Quit │ ↑/k:Up │ ↓/j:Down │ s:Start │ c:Cancel │ u/d:Scroll                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+
+Legend:
+  ○  Pending     - Not started yet
+  ◉  Running     - Currently executing
+  ✓  Completed   - Successfully finished
+  ✗  Failed      - Encountered error
+  ⊘  Cancelled   - Stopped by user
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                       CONCURRENCY MODEL                                        ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+    Thread Pool (Tokio Runtime)
+    
+    ┌─────────────────────────────────────────────────────────────────┐
+    │                                                                  │
+    │  Main Thread:                                                    │
+    │  ┌────────────────────────────────────────────────────────────┐ │
+    │  │  • TUI Event Loop                                          │ │
+    │  │  • Input Processing                                        │ │
+    │  │  • Rendering                                               │ │
+    │  └────────────────────────────────────────────────────────────┘ │
+    │                                                                  │
+    │  Worker Threads (Async Tasks):                                  │
+    │  ┌────────────────────────────────────────────────────────────┐ │
+    │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │ │
+    │  │  │ Agent 1  │  │ Agent 2  │  │ Agent 3  │  │ Agent 4  │  │ │
+    │  │  │  Task    │  │  Task    │  │  Task    │  │  Task    │  │ │
+    │  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │ │
+    │  │                                                            │ │
+    │  │  • Non-blocking I/O                                       │ │
+    │  │  • Cooperative scheduling                                 │ │
+    │  │  • Message passing via channels                           │ │
+    │  └────────────────────────────────────────────────────────────┘ │
+    │                                                                  │
+    └─────────────────────────────────────────────────────────────────┘
+
+    Synchronization:
+    
+    Main Thread                Worker Tasks
+        │                          │
+        │◄─────── mpsc ────────────┤
+        │      (updates)           │
+        │                          │
+        │                          │
+        │──────► spawn ───────────►│
+               (start task)
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                         FILE ORGANIZATION                                      ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+opencode-parallel/
+│
+├── src/                        # Source code
+│   ├── main.rs                 # Entry point (67 lines)
+│   ├── lib.rs                  # Library interface (6 lines)
+│   ├── agent.rs                # Agent logic (153 lines)
+│   ├── executor.rs             # Execution (94 lines)
+│   └── tui.rs                  # Terminal UI (273 lines)
+│
+├── examples/                   # Usage examples
+│   └── basic_usage.rs          # Simple example
+│
+├── .github/                    # GitHub config
+│   └── workflows/              # CI/CD
+│       ├── ci.yml              # Testing & linting
+│       └── release.yml         # Release automation
+│
+├── Cargo.toml                  # Rust project config
+├── Makefile                    # Build automation
+├── setup.sh                    # Environment setup
+├── demo.sh                     # Interactive demo
+│
+├── README.md                   # Main documentation
+├── ARCHITECTURE.md             # Technical details
+├── CONTRIBUTING.md             # Contribution guide
+├── QUICKSTART.md               # Getting started
+├── PROJECT_SUMMARY.md          # Project overview
+├── DIAGRAM.txt                 # This file
+├── LICENSE                     # MIT license
+│
+├── tasks.example.json          # Example config
+└── .gitignore                  # Git ignore rules
+
+
+Configuration Files (Runtime):
+
+~/.config/opencode-parallel/
+├── auth.json                   # API credentials
+└── config.json                 # User preferences (future)
+
+
+Build Artifacts:
+
+target/
+├── debug/                      # Debug builds
+│   └── opencode-parallel       # Debug binary
+└── release/                    # Release builds
+    └── opencode-parallel       # Optimized binary (2-3 MB)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                            END OF DIAGRAM
+═══════════════════════════════════════════════════════════════════════════════
