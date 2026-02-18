@@ -27,12 +27,17 @@ npm i -g opencode-ai
 
 ## Features
 
-- **Native TUI**: Beautiful terminal UI built with ratatui
-- **Parallel Execution**: Run multiple opencode instances simultaneously
-- **Split-pane View**: Monitor all agents at once in separate panes
-- **Real-time Output**: Stream output from each opencode process
-- **Batch Processing**: Run predefined task configurations
-- **Uses Your Config**: Leverages your existing opencode authentication
+- **🎨 Enhanced TUI**: Beautiful, colorful terminal UI with modern styling
+  - Split-pane layout with agent list and detailed output
+  - Real-time progress bars for each agent
+  - Status icons (▶ Running, ✓ Complete, ✗ Failed, ⏸ Pending)
+  - Syntax-highlighted output
+- **⚡ Parallel Execution**: Run multiple opencode instances simultaneously
+- **💬 Ad-hoc Messaging**: Press 'w' to send messages to individual agents
+- **📊 Live Progress Tracking**: See completion progress for each agent
+- **🔄 Real-time Updates**: Stream output from each opencode process
+- **📦 Batch Processing**: Run predefined task configurations
+- **🔑 Uses Your Config**: Leverages your existing opencode authentication
 
 ## Installation
 
@@ -74,6 +79,24 @@ opencode-parallel
 # Or explicitly start TUI with custom agent count
 opencode-parallel tui --agents 8
 ```
+
+## Keyboard Controls
+
+### Normal Mode
+- `q` / `Esc` - Quit application
+- `↑` / `k` - Select previous agent
+- `↓` / `j` - Select next agent
+- `s` - Start selected agent
+- `c` - Cancel selected agent
+- `w` - Write message to selected agent (enter write mode)
+- `u` - Scroll output up
+- `d` - Scroll output down
+
+### Write Mode (press 'w' to enter)
+- Type your message
+- `Enter` - Send message to agent
+- `Esc` - Cancel and return to normal mode
+- `Backspace` - Delete character
 
 ### 3. Batch Processing
 
