@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
@@ -13,6 +13,9 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io;
+use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -261,20 +264,62 @@ fn render_help(f: &mut Frame, area: Rect) {
 }
 
 async fn simulate_agent_work(mut agent: AgentConfig, tx: mpsc::Sender<AgentConfig>) {
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    
     agent.start();
-    agent.add_output(format!("Starting task: {}", agent.task));
-    agent.add_output(format!("Provider: {} / {}", agent.provider, agent.model));
+    agent.add_output(format!("Starting opencode for: {}", agent.task));
+    agent.add_output(format!("Model: {} / {}", agent.provider, agent.model));
     let _ = tx.send(agent.clone()).await;
 
-    for i in 1..=5 {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        agent.add_output(format!("Processing step {}...", i));
-        let _ = tx.send(agent.clone()).await;
+    // Build opencode command
+    let mut cmd = Command::new("opencode");
+    cmd.arg("run");
+    cmd.arg(&agent.task);
+    
+    // Add model flag if specified
+    if !agent.model.is_empty() {
+        cmd.arg("--model");
+        cmd.arg(format!("{}/{}", agent.provider, agent.model));
     }
-
-    agent.add_output("Task completed successfully!".to_string());
-    agent.complete();
+    
+    // Capture stdout and stderr
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    
+    // Spawn the process
+    match cmd.spawn() {
+        Ok(mut child) => {
+            // Get stdout
+            if let Some(stdout) = child.stdout.take() {
+                let mut stdout_reader = BufReader::new(stdout).lines();
+                
+                // Read stdout line by line
+                while let Ok(Some(line)) = stdout_reader.next_line().await {
+                    agent.add_output(line);
+                    let _ = tx.send(agent.clone()).await;
+                }
+            }
+            
+            // Wait for process to complete
+            match child.wait().await {
+                Ok(status) => {
+                    if status.success() {
+                        agent.add_output("✓ Task completed successfully!".to_string());
+                        agent.complete();
+                    } else {
+                        agent.add_output(format!("✗ Failed with exit code: {:?}", status.code()));
+                        agent.fail();
+                    }
+                }
+                Err(e) => {
+                    agent.add_output(format!("✗ Error waiting for process: {}", e));
+                    agent.fail();
+                }
+            }
+        }
+        Err(e) => {
+            agent.add_output(format!("✗ Failed to spawn opencode: {}", e));
+            agent.fail();
+        }
+    }
+    
     let _ = tx.send(agent).await;
 }

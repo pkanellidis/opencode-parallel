@@ -3,32 +3,22 @@
     {
       "provider": "anthropic",
       "model": "claude-3-5-sonnet-20241022",
-      "task": "Refactor the authentication module to use JWT tokens"
-    },
-    {
-      "provider": "openai",
-      "model": "gpt-4",
-      "task": "Add comprehensive unit tests for the API handlers"
+      "task": "Explain how Rust's ownership system works with a simple example"
     },
     {
       "provider": "anthropic",
       "model": "claude-3-5-sonnet-20241022",
-      "task": "Optimize database queries in the user service"
-    },
-    {
-      "provider": "google",
-      "model": "gemini-pro",
-      "task": "Implement caching layer for frequently accessed data"
+      "task": "Show me how to implement a binary search tree in Rust"
     },
     {
       "provider": "anthropic",
       "model": "claude-3-5-sonnet-20241022",
-      "task": "Add input validation middleware"
+      "task": "Create a simple HTTP server using tokio in Rust"
     },
     {
-      "provider": "openai",
-      "model": "gpt-4",
-      "task": "Create API documentation with OpenAPI spec"
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet-20241022",
+      "task": "Write a function to parse JSON and handle errors properly"
     }
   ]
 }

@@ -1,15 +1,38 @@
 # opencode-parallel
 
-A CLI tool for running multiple AI coding agents in parallel, inspired by [opencode](https://opencode.ai).
+A CLI wrapper for running multiple instances of [opencode](https://opencode.ai) in parallel. Execute multiple coding tasks simultaneously and monitor them all in a native terminal UI.
+
+## What It Does
+
+opencode-parallel wraps the `opencode` CLI and runs multiple instances in parallel:
+- Each agent runs as a separate `opencode run` process
+- Monitor all agents in real-time with a split-pane TUI
+- Execute batch tasks from JSON configuration
+- All the power of opencode, parallelized
+
+## Prerequisites
+
+**You must have opencode installed:**
+
+```bash
+# Install opencode first
+curl -fsSL https://opencode.ai/install | bash
+
+# Or with package managers
+brew install opencode
+npm i -g opencode-ai
+```
+
+[See opencode installation docs](https://opencode.ai/docs/cli/)
 
 ## Features
 
 - **Native TUI**: Beautiful terminal UI built with ratatui
-- **Parallel Execution**: Run multiple AI agents simultaneously
+- **Parallel Execution**: Run multiple opencode instances simultaneously
 - **Split-pane View**: Monitor all agents at once in separate panes
-- **Interactive Control**: Start, pause, and cancel individual tasks
-- **Provider Agnostic**: Works with Anthropic, OpenAI, Google, and more
+- **Real-time Output**: Stream output from each opencode process
 - **Batch Processing**: Run predefined task configurations
+- **Uses Your Config**: Leverages your existing opencode authentication
 
 ## Installation
 
@@ -32,11 +55,14 @@ sudo cp target/release/opencode-parallel /usr/local/bin/
 
 ## Quick Start
 
-### 1. Configure Authentication
+### 1. Make Sure opencode is Configured
 
 ```bash
-opencode-parallel auth anthropic --key YOUR_API_KEY
-opencode-parallel auth openai --key YOUR_API_KEY
+# Configure opencode with your API keys
+opencode auth login
+
+# Test it works
+opencode run "Explain Rust ownership"
 ```
 
 ### 2. Start the TUI

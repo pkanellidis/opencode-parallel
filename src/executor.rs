@@ -1,6 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -85,22 +88,68 @@ pub async fn run_batch(config_path: &str, max_parallel: usize) -> Result<()> {
 async fn run_agent(mut agent: AgentConfig, tx: mpsc::Sender<String>) -> Result<AgentConfig> {
     agent.start();
     
-    let _ = tx.send(format!("[{}] Starting agent for task: {}", agent.id, agent.task)).await;
+    let _ = tx.send(format!("[{}] Starting opencode for task: {}", agent.id, agent.task)).await;
     
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // Build opencode command
+    let mut cmd = Command::new("opencode");
+    cmd.arg("run");
+    cmd.arg(&agent.task);
     
-    agent.add_output("Simulated agent execution...".to_string());
-    agent.add_output(format!("Task: {}", agent.task));
-    agent.add_output(format!("Provider: {}", agent.provider));
-    agent.add_output(format!("Model: {}", agent.model));
+    // Add model flag if specified
+    if !agent.model.is_empty() {
+        cmd.arg("--model");
+        cmd.arg(format!("{}/{}", agent.provider, agent.model));
+    }
     
-    let _ = tx.send(format!("[{}] Agent processing...", agent.id)).await;
+    // Capture stdout and stderr
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
     
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    let _ = tx.send(format!("[{}] Executing: opencode run \"{}\" --model {}/{}", 
+        agent.id, agent.task, agent.provider, agent.model)).await;
     
-    agent.complete();
+    // Spawn the process
+    let mut child = cmd.spawn()
+        .context("Failed to spawn opencode process")?;
     
-    let _ = tx.send(format!("[{}] Agent completed", agent.id)).await;
+    // Get stdout
+    let stdout = child.stdout.take()
+        .context("Failed to capture stdout")?;
+    let mut stdout_reader = BufReader::new(stdout).lines();
+    
+    // Read stdout line by line
+    let agent_id = agent.id.clone();
+    let tx_stdout = tx.clone();
+    let stdout_task = tokio::spawn(async move {
+        let mut output_lines = Vec::new();
+        while let Ok(Some(line)) = stdout_reader.next_line().await {
+            let _ = tx_stdout.send(format!("[{}] {}", agent_id, line)).await;
+            output_lines.push(line);
+        }
+        output_lines
+    });
+    
+    // Wait for process to complete
+    let status = child.wait().await
+        .context("Failed to wait for opencode process")?;
+    
+    // Get all output
+    let output_lines = stdout_task.await
+        .context("Failed to read stdout")?;
+    
+    // Add output to agent
+    for line in output_lines {
+        agent.add_output(line);
+    }
+    
+    // Update agent status based on exit code
+    if status.success() {
+        agent.complete();
+        let _ = tx.send(format!("[{}] ✓ Completed successfully", agent.id)).await;
+    } else {
+        agent.fail();
+        let _ = tx.send(format!("[{}] ✗ Failed with exit code: {:?}", agent.id, status.code())).await;
+    }
     
     Ok(agent)
 }

@@ -37,19 +37,6 @@ enum Commands {
         #[arg(short, long, default_value_t = 4)]
         parallel: usize,
     },
-    
-    /// List configured AI providers
-    Providers,
-    
-    /// Configure AI provider credentials
-    Auth {
-        /// Provider name (anthropic, openai, google, etc.)
-        provider: String,
-        
-        /// API key
-        #[arg(short, long)]
-        key: Option<String>,
-    },
 }
 
 #[tokio::main]
@@ -63,12 +50,6 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Run { config, parallel }) => {
             executor::run_batch(&config, parallel).await?;
-        }
-        Some(Commands::Providers) => {
-            agent::list_providers()?;
-        }
-        Some(Commands::Auth { provider, key }) => {
-            agent::configure_auth(&provider, key.as_deref())?;
         }
         None => {
             tui::run_tui(4, ".").await?;
