@@ -2,7 +2,10 @@ pub mod agent;
 pub mod executor;
 pub mod orchestrator;
 pub mod server;
+pub mod utils;
+
 pub mod tui;
+pub mod tui_old;
 
 pub use agent::{AgentConfig, AgentStatus};
 pub use executor::{run_batch, TaskConfig, TaskDefinition};
