@@ -2,8 +2,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod agent;
-mod tui;
 mod executor;
+mod orchestrator;
+mod server;
+mod tui;
 
 #[derive(Parser)]
 #[command(name = "opencode-parallel")]

@@ -51,19 +51,7 @@ impl AgentConfig {
         self.completed_at = Some(chrono::Utc::now());
     }
 
-    pub fn cancel(&mut self) {
-        self.status = AgentStatus::Cancelled;
-        self.completed_at = Some(chrono::Utc::now());
-    }
-
     pub fn add_output(&mut self, line: String) {
         self.output.push(line);
-    }
-
-    pub fn duration(&self) -> Option<chrono::Duration> {
-        match (self.started_at, self.completed_at) {
-            (Some(start), Some(end)) => Some(end - start),
-            _ => None,
-        }
     }
 }

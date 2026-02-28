@@ -1,6 +1,10 @@
 pub mod agent;
 pub mod executor;
+pub mod orchestrator;
+pub mod server;
 pub mod tui;
 
 pub use agent::{AgentConfig, AgentStatus};
 pub use executor::{run_batch, TaskConfig, TaskDefinition};
+pub use orchestrator::{Orchestrator, TaskPlan, Task};
+pub use server::{OpenCodeServer, ServerProcess};
