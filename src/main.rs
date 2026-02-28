@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use opencode_parallel::{executor, tui_old};
+use opencode_parallel::{executor, tui};
 
 #[derive(Parser)]
 #[command(name = "opencode-parallel")]
@@ -44,13 +44,13 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Tui { agents, workdir }) => {
             let workdir = workdir.unwrap_or_else(|| ".".to_string());
-            tui_old::run_tui(agents, &workdir).await?;
+            tui::run_tui(agents, &workdir).await?;
         }
         Some(Commands::Run { config, parallel }) => {
             executor::run_batch(&config, parallel).await?;
         }
         None => {
-            tui_old::run_tui(4, ".").await?;
+            tui::run_tui(4, ".").await?;
         }
     }
 
