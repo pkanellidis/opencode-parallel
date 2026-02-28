@@ -1,263 +1,141 @@
 # opencode-parallel
 
-A CLI wrapper for running multiple instances of [opencode](https://opencode.ai) in parallel. Execute multiple coding tasks simultaneously and monitor them all in a native terminal UI.
+A terminal-based interface for running multiple [opencode](https://opencode.ai) instances in parallel. Orchestrate complex coding tasks by automatically decomposing them into subtasks, each handled by a separate opencode worker running concurrently.
 
-## What It Does
+## Features
 
-opencode-parallel wraps the `opencode` CLI and runs multiple instances in parallel:
-- Each agent runs as a separate `opencode run` process
-- Monitor all agents in real-time with a split-pane TUI
-- Execute batch tasks from JSON configuration
-- All the power of opencode, parallelized
+- **Parallel OpenCode Instances** - Spawn multiple opencode sessions that work simultaneously on different subtasks
+- **Interactive TUI** - Navigate between sessions and workers, view real-time streaming output from each instance
+- **Smart Orchestration** - Automatically breaks down complex tasks into parallelizable subtasks distributed across opencode workers
+- **Permission Handling** - Unified permission dialog for file access across all opencode instances
+- **Session Management** - Create, rename, and switch between multiple orchestration sessions
+- **Model Selection** - Switch AI providers/models on the fly for all workers
+
+## How It Works
+
+1. You describe a complex task (e.g., "Add unit tests to all service files")
+2. The orchestrator analyzes and decomposes it into independent subtasks
+3. Each subtask spawns a dedicated opencode instance running in parallel
+4. Results are streamed back in real-time and aggregated when complete
 
 ## Prerequisites
 
 **You must have opencode installed:**
 
 ```bash
-# Install opencode first
+# Install opencode
 curl -fsSL https://opencode.ai/install | bash
 
-# Or with package managers
-brew install opencode
+# Or with npm
 npm i -g opencode-ai
 ```
 
 [See opencode installation docs](https://opencode.ai/docs/cli/)
 
-## Features
-
-- **🎨 Enhanced TUI**: Beautiful, colorful terminal UI with modern styling
-  - Split-pane layout with agent list and detailed output
-  - Real-time progress bars for each agent
-  - Status icons (▶ Running, ✓ Complete, ✗ Failed, ⏸ Pending)
-  - Syntax-highlighted output
-- **⚡ Parallel Execution**: Run multiple opencode instances simultaneously
-- **💬 Ad-hoc Messaging**: Press 'w' to send messages to individual agents
-- **📊 Live Progress Tracking**: See completion progress for each agent
-- **🔄 Real-time Updates**: Stream output from each opencode process
-- **📦 Batch Processing**: Run predefined task configurations
-- **🔑 Uses Your Config**: Leverages your existing opencode authentication
-
 ## Installation
 
-### Prerequisites
-
-Install Rust if you haven't already:
-
 ```bash
+# Install Rust if needed
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
 
-### Build from source
-
-```bash
+# Build from source
 git clone https://github.com/yourusername/opencode-parallel.git
 cd opencode-parallel
 cargo build --release
 sudo cp target/release/opencode-parallel /usr/local/bin/
 ```
 
-## Quick Start
-
-### 1. Make Sure opencode is Configured
+## Usage
 
 ```bash
-# Configure opencode with your API keys
-opencode auth login
-
-# Test it works
-opencode run "Explain Rust ownership"
-```
-
-### 2. Start the TUI
-
-```bash
-# Run with default 4 parallel agents
+# Start the interactive TUI
 opencode-parallel
 
-# Or explicitly start TUI with custom agent count
-opencode-parallel tui --agents 8
+# Or with options
+opencode-parallel tui --agents 4 --workdir /path/to/project
+
+# Run batch tasks from config
+opencode-parallel run --config tasks.json --parallel 4
 ```
 
-## Keyboard Controls
+## Keyboard Shortcuts
 
-### Normal Mode
-- `q` / `Esc` - Quit application
-- `↑` / `k` - Select previous agent
-- `↓` / `j` - Select next agent
-- `s` - Start selected agent
-- `c` - Cancel selected agent
-- `w` - Write message to selected agent (enter write mode)
-- `u` - Scroll output up
-- `d` - Scroll output down
+| Key | Action |
+|-----|--------|
+| `i` | Enter input mode |
+| `j/k` | Navigate/scroll |
+| `n/p` | Next/previous session |
+| `Tab` | Cycle through workers |
+| `l` | Toggle orchestrator logs |
+| `d` | Delete selected worker |
+| `c` | Clear all workers |
+| `Esc` | Back/exit mode |
+| `q` | Quit |
 
-### Write Mode (press 'w' to enter)
-- Type your message
-- `Enter` - Send message to agent
-- `Esc` - Cancel and return to normal mode
-- `Backspace` - Delete character
+## Slash Commands
 
-### 3. Batch Processing
+| Command | Description |
+|---------|-------------|
+| `/help` | Show all commands |
+| `/new [name]` | Create new session |
+| `/sessions` | List all sessions |
+| `/rename <name>` | Rename current session |
+| `/delete` | Delete current session |
+| `/models` | List available models |
+| `/model` | Open model selector |
+| `/reply #N <msg>` | Reply to worker question |
+| `/clear` | Clear session messages |
 
-Create a task configuration file `tasks.json`:
+## Batch Processing
+
+Create a `tasks.json` configuration:
 
 ```json
 {
   "tasks": [
     {
       "provider": "anthropic",
-      "model": "claude-3-5-sonnet-20241022",
+      "model": "claude-sonnet-4-20250514",
       "task": "Refactor authentication module"
     },
     {
-      "provider": "openai",
+      "provider": "openai", 
       "model": "gpt-4",
       "task": "Add unit tests for API handlers"
-    },
-    {
-      "provider": "anthropic",
-      "model": "claude-3-5-sonnet-20241022",
-      "task": "Optimize database queries"
     }
   ]
 }
 ```
 
-Run the batch:
+Run with:
 
 ```bash
 opencode-parallel run --config tasks.json --parallel 4
 ```
 
-## Usage
-
-### Commands
-
-```bash
-opencode-parallel [COMMAND]
-
-Commands:
-  tui         Start the interactive TUI
-  run         Run a batch of tasks from a config file
-  providers   List configured AI providers
-  auth        Configure AI provider credentials
-  help        Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help     Print help
-  -V, --version  Print version
-```
-
-### TUI Keybindings
-
-- `↑/k` - Move selection up
-- `↓/j` - Move selection down
-- `s` - Start selected agent
-- `c` - Cancel selected agent
-- `u` - Scroll output up
-- `d` - Scroll output down
-- `q/Esc` - Quit
-
-## Architecture
-
-```
-┌─────────────────┐
-│   CLI Entry     │
-│   (main.rs)     │
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    │         │
-┌───▼───┐ ┌──▼──────┐
-│  TUI  │ │ Executor│
-│ Mode  │ │  Batch  │
-└───┬───┘ └──┬──────┘
-    │        │
-    └────┬───┘
-         │
-    ┌────▼─────┐
-    │  Agent   │
-    │ Manager  │
-    └──────────┘
-```
-
-### Components
-
-- **main.rs**: CLI argument parsing and command routing
-- **tui.rs**: Terminal UI with ratatui, split-pane views, and event handling
-- **executor.rs**: Parallel task execution and coordination
-- **agent.rs**: Agent configuration, status tracking, and provider integration
-
-## Configuration
-
-Configuration is stored in `~/.config/opencode-parallel/`:
-
-- `auth.json` - Provider API keys
-- `config.json` - User preferences (coming soon)
-
-## Comparison with opencode
-
-| Feature | opencode | opencode-parallel |
-|---------|----------|-------------------|
-| Single agent | ✓ | ✓ |
-| Multiple agents | - | ✓ |
-| TUI | ✓ | ✓ |
-| Web UI | ✓ | - |
-| Parallel execution | - | ✓ |
-| Split-pane view | - | ✓ |
-| Language | TypeScript | Rust |
-
-## Roadmap
-
-- [ ] Real AI provider integration (Anthropic, OpenAI, Google)
-- [ ] MCP (Model Context Protocol) support
-- [ ] Agent-to-agent communication
-- [ ] Shared context across agents
-- [ ] Result aggregation and merging
-- [ ] Session persistence and resume
-- [ ] Web dashboard
-- [ ] VSCode extension
-
 ## Development
 
 ```bash
-# Run in development mode
+# Run in development
 cargo run
-
-# Run with specific command
-cargo run -- tui --agents 8
 
 # Run tests
 cargo test
 
-# Build optimized release
+# Build release
 cargo build --release
 ```
 
-## Documentation
-
-For more detailed information, check out the [docs/](docs/) directory:
-
-- **[QUICKSTART.md](docs/QUICKSTART.md)** - 5-minute getting started guide
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Technical architecture deep dive
-- **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines
-- **[PROJECT_SUMMARY.md](docs/PROJECT_SUMMARY.md)** - Complete project overview
-- **[BUILD_COMPLETE.md](docs/BUILD_COMPLETE.md)** - Build success summary
-- **[NEXT_STEPS.md](docs/NEXT_STEPS.md)** - What to do next
-- **[GIT_SETUP.md](docs/GIT_SETUP.md)** - Git workflow guide
-- **[DIAGRAM.txt](docs/DIAGRAM.txt)** - ASCII architecture diagrams
-
-## Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](docs/CONTRIBUTING.md) before submitting a Pull Request.
-
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details
+This project is licensed under [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/).
+
+You may fork, modify, and share this software for **noncommercial purposes only**. Commercial use requires a separate license.
+
+See [LICENSE](LICENSE) for full terms.
 
 ## Acknowledgments
 
-- Inspired by [opencode](https://github.com/anomalyco/opencode)
-- Built with [ratatui](https://github.com/ratatui/ratatui)
-- Powered by [tokio](https://tokio.rs)
+- Built on [opencode](https://opencode.ai)
+- TUI powered by [ratatui](https://github.com/ratatui/ratatui)
+- Async runtime by [tokio](https://tokio.rs)
