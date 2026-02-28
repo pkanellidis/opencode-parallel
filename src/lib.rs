@@ -8,5 +8,5 @@ pub mod tui;
 
 pub use agent::{AgentConfig, AgentStatus};
 pub use executor::{run_batch, TaskConfig, TaskDefinition};
-pub use orchestrator::{Orchestrator, TaskPlan, Task};
+pub use orchestrator::{Orchestrator, Task, TaskPlan};
 pub use server::{OpenCodeServer, ServerProcess};

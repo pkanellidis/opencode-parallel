@@ -25,14 +25,18 @@ pub async fn run_batch(config_path: &str, max_parallel: usize) -> Result<()> {
     let content = fs::read_to_string(config_path)?;
     let config: TaskConfig = serde_json::from_str(&content)?;
 
-    println!("Running {} tasks with max {} parallel agents", config.tasks.len(), max_parallel);
-    
+    println!(
+        "Running {} tasks with max {} parallel agents",
+        config.tasks.len(),
+        max_parallel
+    );
+
     let (tx, mut rx) = mpsc::channel(100);
     let mut set = JoinSet::new();
     let mut active = 0;
     let mut completed = 0;
     let total = config.tasks.len();
-    
+
     let mut task_iter = config.tasks.into_iter();
 
     while completed < total {
@@ -41,11 +45,9 @@ pub async fn run_batch(config_path: &str, max_parallel: usize) -> Result<()> {
                 let agent = AgentConfig::new(&task_def.provider, &task_def.model, &task_def.task);
                 let tx = tx.clone();
                 let agent_id = agent.id.clone();
-                
-                set.spawn(async move {
-                    run_agent(agent, tx).await
-                });
-                
+
+                set.spawn(async move { run_agent(agent, tx).await });
+
                 active += 1;
                 println!("[{}] Started: {}", agent_id, task_def.task);
             } else {
@@ -87,36 +89,43 @@ pub async fn run_batch(config_path: &str, max_parallel: usize) -> Result<()> {
 
 async fn run_agent(mut agent: AgentConfig, tx: mpsc::Sender<String>) -> Result<AgentConfig> {
     agent.start();
-    
-    let _ = tx.send(format!("[{}] Starting opencode for task: {}", agent.id, agent.task)).await;
-    
+
+    let _ = tx
+        .send(format!(
+            "[{}] Starting opencode for task: {}",
+            agent.id, agent.task
+        ))
+        .await;
+
     // Build opencode command
     let mut cmd = Command::new("opencode");
     cmd.arg("run");
     cmd.arg(&agent.task);
-    
+
     // Add model flag if specified
     if !agent.model.is_empty() {
         cmd.arg("--model");
         cmd.arg(format!("{}/{}", agent.provider, agent.model));
     }
-    
+
     // Capture stdout and stderr
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    
-    let _ = tx.send(format!("[{}] Executing: opencode run \"{}\" --model {}/{}", 
-        agent.id, agent.task, agent.provider, agent.model)).await;
-    
+
+    let _ = tx
+        .send(format!(
+            "[{}] Executing: opencode run \"{}\" --model {}/{}",
+            agent.id, agent.task, agent.provider, agent.model
+        ))
+        .await;
+
     // Spawn the process
-    let mut child = cmd.spawn()
-        .context("Failed to spawn opencode process")?;
-    
+    let mut child = cmd.spawn().context("Failed to spawn opencode process")?;
+
     // Get stdout
-    let stdout = child.stdout.take()
-        .context("Failed to capture stdout")?;
+    let stdout = child.stdout.take().context("Failed to capture stdout")?;
     let mut stdout_reader = BufReader::new(stdout).lines();
-    
+
     // Read stdout line by line
     let agent_id = agent.id.clone();
     let tx_stdout = tx.clone();
@@ -128,28 +137,37 @@ async fn run_agent(mut agent: AgentConfig, tx: mpsc::Sender<String>) -> Result<A
         }
         output_lines
     });
-    
+
     // Wait for process to complete
-    let status = child.wait().await
+    let status = child
+        .wait()
+        .await
         .context("Failed to wait for opencode process")?;
-    
+
     // Get all output
-    let output_lines = stdout_task.await
-        .context("Failed to read stdout")?;
-    
+    let output_lines = stdout_task.await.context("Failed to read stdout")?;
+
     // Add output to agent
     for line in output_lines {
         agent.add_output(line);
     }
-    
+
     // Update agent status based on exit code
     if status.success() {
         agent.complete();
-        let _ = tx.send(format!("[{}] ✓ Completed successfully", agent.id)).await;
+        let _ = tx
+            .send(format!("[{}] ✓ Completed successfully", agent.id))
+            .await;
     } else {
         agent.fail();
-        let _ = tx.send(format!("[{}] ✗ Failed with exit code: {:?}", agent.id, status.code())).await;
+        let _ = tx
+            .send(format!(
+                "[{}] ✗ Failed with exit code: {:?}",
+                agent.id,
+                status.code()
+            ))
+            .await;
     }
-    
+
     Ok(agent)
 }

@@ -85,12 +85,16 @@ pub async fn handle_app_message(
             app.status = "Ready".to_string();
         }
         AppMessage::Error(error) => {
-            app.current_session_mut().messages.push((format!("Error: {}", error), false));
+            app.current_session_mut()
+                .messages
+                .push((format!("Error: {}", error), false));
             app.status = "Error - Ready for next task".to_string();
         }
         AppMessage::ModelsLoaded(options) => {
             if options.is_empty() {
-                app.current_session_mut().messages.push(("No models available".to_string(), false));
+                app.current_session_mut()
+                    .messages
+                    .push(("No models available".to_string(), false));
                 app.status = "Ready".to_string();
             } else {
                 app.model_options = options;
@@ -192,64 +196,124 @@ async fn handle_submit_input(
     tx: &Sender<AppMessage>,
 ) {
     if let Some(cmd) = parse_slash_command(&message) {
-        app.current_session_mut().messages.push((format!("> {}", message), true));
+        app.current_session_mut()
+            .messages
+            .push((format!("> {}", message), true));
         handle_slash_command(app, cmd, server, tx).await;
     } else {
         let session_id = app.current_session().id;
         let existing_orch_session = app.current_session().orchestrator_session_id.clone();
-        app.current_session_mut().messages.push((format!("> {}", message), true));
+        app.current_session_mut()
+            .messages
+            .push((format!("> {}", message), true));
         app.status = "Orchestrator analyzing...".to_string();
-        
+
         let server_clone = server.clone();
         let tx_clone = tx.clone();
         let msg = message.clone();
-        
+
         tokio::spawn(async move {
-            let _ = tx_clone.send(AppMessage::OrchestratorLog(session_id, "Starting orchestrator...".to_string())).await;
-            
+            let _ = tx_clone
+                .send(AppMessage::OrchestratorLog(
+                    session_id,
+                    "Starting orchestrator...".to_string(),
+                ))
+                .await;
+
             let mut orch = Orchestrator::new(server_clone.clone());
-            
+
             if let Some(orch_session_id) = existing_orch_session {
                 orch.set_session_id(orch_session_id);
             } else if let Err(e) = orch.init().await {
                 for log in orch.get_logs() {
-                    let _ = tx_clone.send(AppMessage::OrchestratorLog(session_id, log.clone())).await;
+                    let _ = tx_clone
+                        .send(AppMessage::OrchestratorLog(session_id, log.clone()))
+                        .await;
                 }
-                let _ = tx_clone.send(AppMessage::Error(format!("Orchestrator init failed: {}", e))).await;
+                let _ = tx_clone
+                    .send(AppMessage::Error(format!(
+                        "Orchestrator init failed: {}",
+                        e
+                    )))
+                    .await;
                 return;
             }
-            
+
             for log in orch.get_logs() {
-                let _ = tx_clone.send(AppMessage::OrchestratorLog(session_id, log.clone())).await;
+                let _ = tx_clone
+                    .send(AppMessage::OrchestratorLog(session_id, log.clone()))
+                    .await;
             }
-            
+
             let orch_session_id = orch.get_session_id().cloned().unwrap_or_default();
-            
+
             match orch.plan_tasks(&msg).await {
                 Ok(plan) => {
                     let logs = orch.get_logs().to_vec();
-                    let _ = tx_clone.send(AppMessage::TaskPlan(session_id, plan.clone(), logs, orch_session_id)).await;
-                    
+                    let _ = tx_clone
+                        .send(AppMessage::TaskPlan(
+                            session_id,
+                            plan.clone(),
+                            logs,
+                            orch_session_id,
+                        ))
+                        .await;
+
                     for task in plan.tasks {
                         let server = server_clone.clone();
                         let tx = tx_clone.clone();
                         let task_id = task.id;
                         let prompt = task.prompt.clone();
-                        
+
                         tokio::spawn(async move {
-                            let _ = tx.send(AppMessage::WorkerOutput(session_id, task_id, format!("Creating session..."))).await;
-                            
-                            match server.create_session(Some(&format!("Worker {}", task_id))).await {
+                            let _ = tx
+                                .send(AppMessage::WorkerOutput(
+                                    session_id,
+                                    task_id,
+                                    format!("Creating session..."),
+                                ))
+                                .await;
+
+                            match server
+                                .create_session(Some(&format!("Worker {}", task_id)))
+                                .await
+                            {
                                 Ok(session) => {
-                                    let _ = tx.send(AppMessage::WorkerStarted(session_id, task_id, session.id.clone())).await;
-                                    let _ = tx.send(AppMessage::WorkerOutput(session_id, task_id, "Streaming response...".to_string())).await;
-                                    
-                                    if let Err(e) = server.send_message_async(&session.id, &prompt).await {
-                                        let _ = tx.send(AppMessage::WorkerError(session_id, task_id, format!("Send failed: {}", e))).await;
+                                    let _ = tx
+                                        .send(AppMessage::WorkerStarted(
+                                            session_id,
+                                            task_id,
+                                            session.id.clone(),
+                                        ))
+                                        .await;
+                                    let _ = tx
+                                        .send(AppMessage::WorkerOutput(
+                                            session_id,
+                                            task_id,
+                                            "Streaming response...".to_string(),
+                                        ))
+                                        .await;
+
+                                    if let Err(e) =
+                                        server.send_message_async(&session.id, &prompt).await
+                                    {
+                                        let _ = tx
+                                            .send(AppMessage::WorkerError(
+                                                session_id,
+                                                task_id,
+                                                format!("Send failed: {}", e),
+                                            ))
+                                            .await;
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(AppMessage::WorkerError(session_id, task_id, format!("Create session failed: {}", e))).await;
+                                    let _ = tx
+                                        .send(AppMessage::WorkerError(
+                                            session_id,
+                                            task_id,
+                                            format!("Create session failed: {}", e),
+                                        ))
+                                        .await;
                                 }
                             }
                         });
@@ -257,9 +321,13 @@ async fn handle_submit_input(
                 }
                 Err(e) => {
                     for log in orch.get_logs() {
-                        let _ = tx_clone.send(AppMessage::OrchestratorLog(session_id, log.clone())).await;
+                        let _ = tx_clone
+                            .send(AppMessage::OrchestratorLog(session_id, log.clone()))
+                            .await;
                     }
-                    let _ = tx_clone.send(AppMessage::Error(format!("Planning failed: {}", e))).await;
+                    let _ = tx_clone
+                        .send(AppMessage::Error(format!("Planning failed: {}", e)))
+                        .await;
                 }
             }
         });
@@ -276,23 +344,48 @@ async fn handle_slash_command(
         SlashCommand::Help => {
             let session = app.current_session_mut();
             session.messages.push(("Commands:".to_string(), false));
-            session.messages.push(("  /new [name]    - Create session".to_string(), false));
-            session.messages.push(("  /sessions      - List sessions".to_string(), false));
-            session.messages.push(("  /rename <name> - Rename session".to_string(), false));
-            session.messages.push(("  /delete        - Delete session".to_string(), false));
-            session.messages.push(("  /models        - List models".to_string(), false));
-            session.messages.push(("  /model         - Select model".to_string(), false));
-            session.messages.push(("  /reply #N msg  - Reply to worker".to_string(), false));
-            session.messages.push(("  /clear         - Clear messages".to_string(), false));
+            session
+                .messages
+                .push(("  /new [name]    - Create session".to_string(), false));
+            session
+                .messages
+                .push(("  /sessions      - List sessions".to_string(), false));
+            session
+                .messages
+                .push(("  /rename <name> - Rename session".to_string(), false));
+            session
+                .messages
+                .push(("  /delete        - Delete session".to_string(), false));
+            session
+                .messages
+                .push(("  /models        - List models".to_string(), false));
+            session
+                .messages
+                .push(("  /model         - Select model".to_string(), false));
+            session
+                .messages
+                .push(("  /reply #N msg  - Reply to worker".to_string(), false));
+            session
+                .messages
+                .push(("  /clear         - Clear messages".to_string(), false));
         }
         SlashCommand::NewSession(name) => {
             app.create_session(name);
         }
         SlashCommand::ListSessions => {
-            let list: Vec<String> = app.sessions.iter().enumerate()
+            let list: Vec<String> = app
+                .sessions
+                .iter()
+                .enumerate()
                 .map(|(i, s)| {
                     let marker = if i == app.current_session { ">" } else { " " };
-                    format!("{} {}: {} ({} workers)", marker, i + 1, s.name, s.workers.len())
+                    format!(
+                        "{} {}: {} ({} workers)",
+                        marker,
+                        i + 1,
+                        s.name,
+                        s.workers.len()
+                    )
                 })
                 .collect();
             let session = app.current_session_mut();
@@ -307,7 +400,9 @@ async fn handle_slash_command(
         }
         SlashCommand::DeleteSession => {
             if app.sessions.len() <= 1 {
-                app.current_session_mut().messages.push(("Cannot delete only session".to_string(), false));
+                app.current_session_mut()
+                    .messages
+                    .push(("Cannot delete only session".to_string(), false));
             } else {
                 app.confirm_delete_session = true;
                 app.status = format!("Delete '{}'? (y/n)", app.current_session().name);
@@ -315,7 +410,9 @@ async fn handle_slash_command(
         }
         SlashCommand::Clear => {
             app.current_session_mut().messages.clear();
-            app.current_session_mut().messages.push(("Cleared".to_string(), false));
+            app.current_session_mut()
+                .messages
+                .push(("Cleared".to_string(), false));
         }
         SlashCommand::Models => {
             let server_clone = server.clone();
@@ -324,10 +421,17 @@ async fn handle_slash_command(
             tokio::spawn(async move {
                 match server_clone.get_providers().await {
                     Ok(resp) => {
-                        let _ = tx_clone.send(AppMessage::CommandResult(format!("Providers: {}", resp.connected.join(", ")))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::CommandResult(format!(
+                                "Providers: {}",
+                                resp.connected.join(", ")
+                            )))
+                            .await;
                     }
                     Err(e) => {
-                        let _ = tx_clone.send(AppMessage::Error(format!("Failed: {}", e))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::Error(format!("Failed: {}", e)))
+                            .await;
                     }
                 }
             });
@@ -342,9 +446,11 @@ async fn handle_slash_command(
                         let mut options = Vec::new();
                         for provider in &resp.all {
                             if resp.connected.contains(&provider.id) {
-                                let provider_name = provider.name.as_ref().unwrap_or(&provider.id).clone();
+                                let provider_name =
+                                    provider.name.as_ref().unwrap_or(&provider.id).clone();
                                 for (_key, model) in &provider.models {
-                                    let model_name = model.name.as_ref().unwrap_or(&model.id).clone();
+                                    let model_name =
+                                        model.name.as_ref().unwrap_or(&model.id).clone();
                                     options.push(ModelOption {
                                         provider_id: provider.id.clone(),
                                         provider_name: provider_name.clone(),
@@ -357,7 +463,9 @@ async fn handle_slash_command(
                         let _ = tx_clone.send(AppMessage::ModelsLoaded(options)).await;
                     }
                     Err(e) => {
-                        let _ = tx_clone.send(AppMessage::Error(format!("Failed: {}", e))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::Error(format!("Failed: {}", e)))
+                            .await;
                     }
                 }
             });
@@ -369,10 +477,17 @@ async fn handle_slash_command(
             tokio::spawn(async move {
                 match server_clone.set_model(&provider, &model).await {
                     Ok(()) => {
-                        let _ = tx_clone.send(AppMessage::CommandResult(format!("Model set to {}/{}", provider, model))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::CommandResult(format!(
+                                "Model set to {}/{}",
+                                provider, model
+                            )))
+                            .await;
                     }
                     Err(e) => {
-                        let _ = tx_clone.send(AppMessage::Error(format!("Failed: {}", e))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::Error(format!("Failed: {}", e)))
+                            .await;
                     }
                 }
             });
@@ -385,22 +500,33 @@ async fn handle_slash_command(
                         worker.state = WorkerState::Running;
                         worker.pending_question = None;
                         worker.pending_question_request_id = None;
-                        session.messages.push((format!("[To #{}] {}", worker_id, reply_message), true));
-                        
+                        session
+                            .messages
+                            .push((format!("[To #{}] {}", worker_id, reply_message), true));
+
                         let server_clone = server.clone();
                         let tx_clone = tx.clone();
                         tokio::spawn(async move {
                             let answers = vec![vec![reply_message]];
-                            if let Err(e) = server_clone.reply_to_question(&request_id, answers).await {
-                                let _ = tx_clone.send(AppMessage::Error(format!("Reply failed: {}", e))).await;
+                            if let Err(e) =
+                                server_clone.reply_to_question(&request_id, answers).await
+                            {
+                                let _ = tx_clone
+                                    .send(AppMessage::Error(format!("Reply failed: {}", e)))
+                                    .await;
                             }
                         });
                     }
                 } else {
-                    session.messages.push((format!("Worker #{} not waiting for input", worker_id), false));
+                    session.messages.push((
+                        format!("Worker #{} not waiting for input", worker_id),
+                        false,
+                    ));
                 }
             } else {
-                session.messages.push((format!("Worker #{} not found", worker_id), false));
+                session
+                    .messages
+                    .push((format!("Worker #{} not found", worker_id), false));
             }
         }
         SlashCommand::Projects => {
@@ -410,11 +536,15 @@ async fn handle_slash_command(
                 match server_clone.list_projects().await {
                     Ok(projects) => {
                         for p in projects {
-                            let _ = tx_clone.send(AppMessage::CommandResult(format!("  {}", p.worktree))).await;
+                            let _ = tx_clone
+                                .send(AppMessage::CommandResult(format!("  {}", p.worktree)))
+                                .await;
                         }
                     }
                     Err(e) => {
-                        let _ = tx_clone.send(AppMessage::Error(format!("Failed: {}", e))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::Error(format!("Failed: {}", e)))
+                            .await;
                     }
                 }
             });
@@ -425,10 +555,17 @@ async fn handle_slash_command(
             tokio::spawn(async move {
                 match server_clone.get_current_project().await {
                     Ok(p) => {
-                        let _ = tx_clone.send(AppMessage::CommandResult(format!("Current: {}", p.worktree))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::CommandResult(format!(
+                                "Current: {}",
+                                p.worktree
+                            )))
+                            .await;
                     }
                     Err(e) => {
-                        let _ = tx_clone.send(AppMessage::Error(format!("Failed: {}", e))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::Error(format!("Failed: {}", e)))
+                            .await;
                     }
                 }
             });
@@ -439,16 +576,22 @@ async fn handle_slash_command(
             tokio::spawn(async move {
                 match server_clone.get_path().await {
                     Ok(path) => {
-                        let _ = tx_clone.send(AppMessage::CommandResult(format!("Path: {}", path))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::CommandResult(format!("Path: {}", path)))
+                            .await;
                     }
                     Err(e) => {
-                        let _ = tx_clone.send(AppMessage::Error(format!("Failed: {}", e))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::Error(format!("Failed: {}", e)))
+                            .await;
                     }
                 }
             });
         }
         SlashCommand::Unknown(cmd) => {
-            app.current_session_mut().messages.push((format!("Unknown: /{}", cmd), false));
+            app.current_session_mut()
+                .messages
+                .push((format!("Unknown: /{}", cmd), false));
         }
     }
 }
@@ -505,15 +648,21 @@ async fn reply_permission(
     let tx_clone = tx.clone();
     let reply_str = reply.to_string();
     let perm_name = perm.permission.clone();
-    
+
     tokio::spawn(async move {
-        if let Err(e) = server_clone.reply_to_permission(&perm.request_id, &reply_str).await {
-            let _ = tx_clone.send(AppMessage::Error(format!("Permission reply failed: {}", e))).await;
+        if let Err(e) = server_clone
+            .reply_to_permission(&perm.request_id, &reply_str)
+            .await
+        {
+            let _ = tx_clone
+                .send(AppMessage::Error(format!("Permission reply failed: {}", e)))
+                .await;
         }
     });
-    
-    app.orchestrator_logs.push(format!("[PERM] {} -> {}", perm_name, reply));
-    
+
+    app.orchestrator_logs
+        .push(format!("[PERM] {} -> {}", perm_name, reply));
+
     if app.pending_permissions.is_empty() {
         app.show_permission_dialog = false;
         app.status = "Ready".to_string();
@@ -544,14 +693,22 @@ async fn handle_model_selector(
                 let tx_clone = tx.clone();
                 app.status = format!("Setting {}/{}...", selected.provider_id, selected.model_id);
                 tokio::spawn(async move {
-                    match server_clone.set_model(&selected.provider_id, &selected.model_id).await {
+                    match server_clone
+                        .set_model(&selected.provider_id, &selected.model_id)
+                        .await
+                    {
                         Ok(()) => {
-                            let _ = tx_clone.send(AppMessage::CommandResult(
-                                format!("Model: {}/{}", selected.provider_id, selected.model_id)
-                            )).await;
+                            let _ = tx_clone
+                                .send(AppMessage::CommandResult(format!(
+                                    "Model: {}/{}",
+                                    selected.provider_id, selected.model_id
+                                )))
+                                .await;
                         }
                         Err(e) => {
-                            let _ = tx_clone.send(AppMessage::Error(format!("Failed: {}", e))).await;
+                            let _ = tx_clone
+                                .send(AppMessage::Error(format!("Failed: {}", e)))
+                                .await;
                         }
                     }
                 });
@@ -572,7 +729,9 @@ fn handle_confirm_delete(app: &mut App, key: KeyEvent) {
             if let Some(idx) = session.selected_worker {
                 let id = session.workers[idx].id;
                 session.workers.remove(idx);
-                session.messages.push((format!("Deleted worker #{}", id), false));
+                session
+                    .messages
+                    .push((format!("Deleted worker #{}", id), false));
                 if session.workers.is_empty() {
                     session.selected_worker = None;
                 } else if idx >= session.workers.len() {
@@ -597,7 +756,9 @@ fn handle_confirm_clear_all(app: &mut App, key: KeyEvent) {
             let count = session.workers.len();
             session.workers.clear();
             session.selected_worker = None;
-            session.messages.push((format!("Cleared {} workers", count), false));
+            session
+                .messages
+                .push((format!("Cleared {} workers", count), false));
             app.confirm_clear_all = false;
             app.status = "Cleared".to_string();
         }
@@ -625,7 +786,7 @@ fn handle_confirm_delete_session(app: &mut App, key: KeyEvent) {
 
 fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
     let has_selected_worker = app.current_session().selected_worker.is_some();
-    
+
     match key.code {
         KeyCode::Char('q') => app.quit = true,
         KeyCode::Char('i') | KeyCode::Enter => app.input_mode = true,
@@ -642,7 +803,8 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
             if app.show_logs {
                 app.logs_scroll = app.logs_scroll.saturating_sub(1);
             } else if has_selected_worker {
-                app.current_session_mut().scroll_offset = app.current_session().scroll_offset.saturating_sub(1);
+                app.current_session_mut().scroll_offset =
+                    app.current_session().scroll_offset.saturating_sub(1);
             } else {
                 app.current_session_mut().select_prev_worker();
             }
@@ -674,7 +836,10 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('c') | KeyCode::Char('C') => {
             if !app.current_session().workers.is_empty() {
                 app.confirm_clear_all = true;
-                app.status = format!("Clear {} workers? (y/n)", app.current_session().workers.len());
+                app.status = format!(
+                    "Clear {} workers? (y/n)",
+                    app.current_session().workers.len()
+                );
             }
         }
         KeyCode::PageDown | KeyCode::Char('J') => {
@@ -688,7 +853,8 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
             if app.show_logs {
                 app.logs_scroll = app.logs_scroll.saturating_sub(20);
             } else {
-                app.current_session_mut().scroll_offset = app.current_session().scroll_offset.saturating_sub(10);
+                app.current_session_mut().scroll_offset =
+                    app.current_session().scroll_offset.saturating_sub(10);
             }
         }
         KeyCode::Home | KeyCode::Char('g') => {
@@ -737,18 +903,32 @@ fn handle_task_plan(
         }
         session.workers.clear();
         session.selected_worker = None;
-        session.messages.push((format!("Plan: {}", plan.reasoning), false));
-        session.messages.push((format!("Spawning {} workers...", plan.tasks.len()), false));
+        session
+            .messages
+            .push((format!("Plan: {}", plan.reasoning), false));
+        session
+            .messages
+            .push((format!("Spawning {} workers...", plan.tasks.len()), false));
         for task in &plan.tasks {
-            session.messages.push((format!("  #{}: {}", task.id, task.description), false));
-            session.workers.push(Worker::new(task.id, task.description.clone()));
+            session
+                .messages
+                .push((format!("  #{}: {}", task.id, task.description), false));
+            session
+                .workers
+                .push(Worker::new(task.id, task.description.clone()));
         }
     }
     app.status = format!("Running {} workers", plan.tasks.len());
 }
 
-fn handle_worker_started(app: &mut App, session_id: usize, worker_id: u32, opencode_session_id: String) {
-    app.orchestrator_logs.push(format!("[WORKER] #{} started", worker_id));
+fn handle_worker_started(
+    app: &mut App,
+    session_id: usize,
+    worker_id: u32,
+    opencode_session_id: String,
+) {
+    app.orchestrator_logs
+        .push(format!("[WORKER] #{} started", worker_id));
     if let Some(session) = app.sessions.iter_mut().find(|s| s.id == session_id) {
         if let Some(worker) = session.workers.iter_mut().find(|w| w.id == worker_id) {
             worker.session_id = Some(opencode_session_id);
@@ -783,7 +963,11 @@ async fn handle_stream_event(
         }
         StreamEvent::PartUpdated { session_id, part } => {
             if let Some(session) = app.find_session_by_worker_session_id(&session_id) {
-                if let Some(worker) = session.workers.iter_mut().find(|w| w.session_id.as_deref() == Some(&session_id)) {
+                if let Some(worker) = session
+                    .workers
+                    .iter_mut()
+                    .find(|w| w.session_id.as_deref() == Some(&session_id))
+                {
                     if let Some(text) = &part.text {
                         worker.streaming_content = text.clone();
                         worker.current_tool = None;
@@ -791,11 +975,20 @@ async fn handle_stream_event(
                 }
             }
         }
-        StreamEvent::ToolCall { session_id, tool_name, status, input } => {
+        StreamEvent::ToolCall {
+            session_id,
+            tool_name,
+            status,
+            input,
+        } => {
             let mut question_to_show: Option<(u32, String, String)> = None;
-            
+
             if let Some(session) = app.find_session_by_worker_session_id(&session_id) {
-                if let Some(worker) = session.workers.iter_mut().find(|w| w.session_id.as_deref() == Some(&session_id)) {
+                if let Some(worker) = session
+                    .workers
+                    .iter_mut()
+                    .find(|w| w.session_id.as_deref() == Some(&session_id))
+                {
                     let display_name = format_tool_display(&tool_name, &input);
                     match status.as_str() {
                         "pending" | "running" => {
@@ -805,7 +998,8 @@ async fn handle_stream_event(
                                 if !extracted.is_empty() {
                                     worker.pending_question = Some(extracted.clone());
                                     worker.state = WorkerState::WaitingForInput;
-                                    question_to_show = Some((worker.id, worker.description.clone(), extracted));
+                                    question_to_show =
+                                        Some((worker.id, worker.description.clone(), extracted));
                                 }
                             }
                         }
@@ -819,77 +1013,120 @@ async fn handle_stream_event(
                     }
                 }
             }
-            
+
             if let Some((worker_id, desc, question_text)) = question_to_show {
-                app.current_session_mut().messages.push((format!("Worker #{} ({}) asks:", worker_id, desc), false));
+                app.current_session_mut()
+                    .messages
+                    .push((format!("Worker #{} ({}) asks:", worker_id, desc), false));
                 for line in question_text.lines() {
-                    app.current_session_mut().messages.push((format!("  {}", line), false));
+                    app.current_session_mut()
+                        .messages
+                        .push((format!("  {}", line), false));
                 }
-                app.current_session_mut().messages.push((format!("Reply: /reply #{} <answer>", worker_id), false));
+                app.current_session_mut()
+                    .messages
+                    .push((format!("Reply: /reply #{} <answer>", worker_id), false));
                 app.status = format!("Worker #{} waiting for input", worker_id);
             }
         }
         StreamEvent::SessionIdle { session_id } => {
             let mut report_data: Option<(usize, String)> = None;
-            
+
             if let Some(session) = app.find_session_by_worker_session_id(&session_id) {
-                if let Some(worker) = session.workers.iter_mut().find(|w| w.session_id.as_deref() == Some(&session_id)) {
+                if let Some(worker) = session
+                    .workers
+                    .iter_mut()
+                    .find(|w| w.session_id.as_deref() == Some(&session_id))
+                {
                     if worker.pending_question.is_none() {
                         worker.state = WorkerState::Complete;
                         if !worker.streaming_content.is_empty() {
-                            worker.output = worker.streaming_content.lines().map(|s| s.to_string()).collect();
+                            worker.output = worker
+                                .streaming_content
+                                .lines()
+                                .map(|s| s.to_string())
+                                .collect();
                         }
                         worker.output.push("Complete".to_string());
-                        
+
                         let summary = worker.get_summary();
-                        session.messages.push((format!("--- Worker #{} ---", worker.id), false));
+                        session
+                            .messages
+                            .push((format!("--- Worker #{} ---", worker.id), false));
                         for line in summary.lines().take(5) {
                             session.messages.push((line.to_string(), false));
                         }
                         worker.streaming_content.clear();
                     }
                 }
-                
+
                 let all_done = session.workers.iter().all(|w| w.state.is_terminal());
                 if all_done && !session.workers.is_empty() {
-                    let summaries: Vec<String> = session.workers.iter()
+                    let summaries: Vec<String> = session
+                        .workers
+                        .iter()
                         .map(|w| format!("#{}: {}", w.id, w.get_summary()))
                         .collect();
                     report_data = Some((session.id, summaries.join("\n\n")));
                 }
             }
-            
+
             if let Some((ui_session_id, results)) = report_data {
                 app.status = "Reporting to orchestrator...".to_string();
                 let tx_clone = tx.clone();
                 tokio::spawn(async move {
-                    let _ = tx_clone.send(AppMessage::ReportToOrchestrator(ui_session_id, results)).await;
+                    let _ = tx_clone
+                        .send(AppMessage::ReportToOrchestrator(ui_session_id, results))
+                        .await;
                 });
             }
         }
-        StreamEvent::QuestionAsked { session_id, request_id, questions } => {
+        StreamEvent::QuestionAsked {
+            session_id,
+            request_id,
+            questions,
+        } => {
             let mut question_info: Option<(u32, String)> = None;
-            
+
             if let Some(session) = app.find_session_by_worker_session_id(&session_id) {
-                if let Some(worker) = session.workers.iter_mut().find(|w| w.session_id.as_deref() == Some(&session_id)) {
-                    let question_text: String = questions.iter().map(|q| q.question.clone()).collect::<Vec<_>>().join("\n");
+                if let Some(worker) = session
+                    .workers
+                    .iter_mut()
+                    .find(|w| w.session_id.as_deref() == Some(&session_id))
+                {
+                    let question_text: String = questions
+                        .iter()
+                        .map(|q| q.question.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     worker.pending_question = Some(question_text.clone());
                     worker.pending_question_request_id = Some(request_id);
                     worker.state = WorkerState::WaitingForInput;
                     question_info = Some((worker.id, question_text));
                 }
             }
-            
+
             if let Some((worker_id, question_text)) = question_info {
-                app.current_session_mut().messages.push((format!("Worker #{} asks:", worker_id), false));
+                app.current_session_mut()
+                    .messages
+                    .push((format!("Worker #{} asks:", worker_id), false));
                 for line in question_text.lines() {
-                    app.current_session_mut().messages.push((format!("  {}", line), false));
+                    app.current_session_mut()
+                        .messages
+                        .push((format!("  {}", line), false));
                 }
-                app.current_session_mut().messages.push((format!("Reply: /reply #{} <answer>", worker_id), false));
+                app.current_session_mut()
+                    .messages
+                    .push((format!("Reply: /reply #{} <answer>", worker_id), false));
                 app.status = format!("Worker #{} waiting", worker_id);
             }
         }
-        StreamEvent::PermissionAsked { session_id, request_id, permission, patterns } => {
+        StreamEvent::PermissionAsked {
+            session_id,
+            request_id,
+            permission,
+            patterns,
+        } => {
             let mut worker_info: Option<(u32, String)> = None;
             for session in &app.sessions {
                 for worker in &session.workers {
@@ -899,7 +1136,7 @@ async fn handle_stream_event(
                     }
                 }
             }
-            
+
             let pending = PendingPermission {
                 request_id,
                 session_id,
@@ -909,7 +1146,7 @@ async fn handle_stream_event(
                 worker_description: worker_info.map(|(_, desc)| desc),
             };
             app.pending_permissions.push(pending);
-            
+
             if !app.show_permission_dialog {
                 app.show_permission_dialog = true;
                 app.permission_selector_index = 0;
@@ -934,17 +1171,21 @@ async fn handle_report_to_orchestrator(
             let server_clone = server.clone();
             let orch_session_id = orch_session_id.clone();
             let tx_clone = tx.clone();
-            
+
             tokio::spawn(async move {
                 let mut orch = Orchestrator::new(server_clone);
                 orch.set_session_id(orch_session_id);
-                
+
                 match orch.report_worker_results(&results).await {
                     Ok(()) => {
-                        let _ = tx_clone.send(AppMessage::CommandResult("Results reported".to_string())).await;
+                        let _ = tx_clone
+                            .send(AppMessage::CommandResult("Results reported".to_string()))
+                            .await;
                     }
                     Err(e) => {
-                        let _ = tx_clone.send(AppMessage::CommandResult(format!("Report failed: {}", e))).await;
+                        let _ = tx_clone
+                            .send(AppMessage::CommandResult(format!("Report failed: {}", e)))
+                            .await;
                     }
                 }
             });

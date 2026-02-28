@@ -134,7 +134,8 @@ impl OpenCodeServer {
         self.logs.log(format!("Response status: {}", status));
 
         let body = resp.text().await?;
-        self.logs.log(format!("Response length: {} bytes", body.len()));
+        self.logs
+            .log(format!("Response length: {} bytes", body.len()));
 
         let msg_response: MessageResponse = serde_json::from_str(&body).map_err(|e| {
             anyhow::anyhow!(
@@ -144,8 +145,10 @@ impl OpenCodeServer {
             )
         })?;
 
-        self.logs
-            .log(format!("Message response: {} parts", msg_response.parts.len()));
+        self.logs.log(format!(
+            "Message response: {} parts",
+            msg_response.parts.len()
+        ));
         Ok(msg_response)
     }
 
@@ -377,10 +380,7 @@ impl OpenCodeServer {
 
         let resp = self
             .client
-            .post(format!(
-                "{}/permission/{}/reply",
-                self.base_url, request_id
-            ))
+            .post(format!("{}/permission/{}/reply", self.base_url, request_id))
             .json(&body)
             .send()
             .await?;
@@ -585,10 +585,7 @@ fn parse_message_updated(parsed: &serde_json::Value, logs: &ServerLogs) {
     if let Some(props) = parsed.get("properties") {
         if let Some(info) = props.get("info") {
             let role = info.get("role").and_then(|v| v.as_str()).unwrap_or("");
-            let session_id = info
-                .get("sessionID")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let session_id = info.get("sessionID").and_then(|v| v.as_str()).unwrap_or("");
             logs.log(format!(
                 "  role={} session={}",
                 role,

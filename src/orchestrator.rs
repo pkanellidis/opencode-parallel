@@ -85,7 +85,10 @@ impl Orchestrator {
         self.log("Initializing orchestrator session...".to_string());
         match self.server.create_session(Some("Orchestrator")).await {
             Ok(session) => {
-                self.log(format!("Session created: {}", &session.id[..8.min(session.id.len())]));
+                self.log(format!(
+                    "Session created: {}",
+                    &session.id[..8.min(session.id.len())]
+                ));
                 self.session_id = Some(session.id);
                 Ok(())
             }
@@ -97,7 +100,10 @@ impl Orchestrator {
     }
 
     pub fn set_session_id(&mut self, session_id: String) {
-        self.log(format!("Using existing session: {}", &session_id[..8.min(session_id.len())]));
+        self.log(format!(
+            "Using existing session: {}",
+            &session_id[..8.min(session_id.len())]
+        ));
         self.session_id = Some(session_id);
     }
 
@@ -106,16 +112,18 @@ impl Orchestrator {
     }
 
     pub async fn report_worker_results(&mut self, results: &str) -> Result<()> {
-        let session_id = self.session_id.clone()
+        let session_id = self
+            .session_id
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("Orchestrator not initialized"))?;
 
         self.log("Reporting worker results to orchestrator...".to_string());
-        
+
         let report = format!(
             "WORKER RESULTS (for context in future requests):\n{}",
             results
         );
-        
+
         let _ = self.server.send_message(&session_id, &report).await?;
         self.log("Worker results reported successfully".to_string());
         Ok(())
@@ -124,18 +132,19 @@ impl Orchestrator {
     pub async fn plan_tasks(&mut self, user_message: &str) -> Result<TaskPlan> {
         self.log(format!("Planning tasks for: {}", user_message));
 
-        let session_id = self.session_id.clone()
+        let session_id = self
+            .session_id
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("Orchestrator not initialized"))?;
 
         let prompt = format!(
             "{}\n\nUser request: {}",
-            ORCHESTRATOR_SYSTEM_PROMPT,
-            user_message
+            ORCHESTRATOR_SYSTEM_PROMPT, user_message
         );
 
         self.log("Sending request to orchestrator AI...".to_string());
         let response = self.server.send_message(&session_id, &prompt).await?;
-        
+
         let mut full_text = String::new();
         for part in response.parts {
             if let Some(text) = part.text {
@@ -161,9 +170,13 @@ impl Orchestrator {
         }
     }
 
-    fn parse_task_plan(&mut self, response: &str, original_message: &str) -> Result<TaskPlan, String> {
+    fn parse_task_plan(
+        &mut self,
+        response: &str,
+        original_message: &str,
+    ) -> Result<TaskPlan, String> {
         let cleaned = response.trim();
-        
+
         // Try 1: Direct parse
         self.log("Attempt 1: Direct JSON parse".to_string());
         if let Ok(plan) = serde_json::from_str::<TaskPlan>(cleaned) {
@@ -187,7 +200,10 @@ impl Orchestrator {
         // Try 3: Find JSON object with brace matching
         self.log("Attempt 3: Brace-matching JSON extraction".to_string());
         if let Some(json_str) = self.extract_json_object(cleaned) {
-            self.log(format!("Found JSON object: {}", truncate_str(&json_str, 100)));
+            self.log(format!(
+                "Found JSON object: {}",
+                truncate_str(&json_str, 100)
+            ));
             if let Ok(plan) = serde_json::from_str::<TaskPlan>(&json_str) {
                 if !plan.tasks.is_empty() {
                     self.log("Success: Brace-matched extraction worked".to_string());
@@ -208,8 +224,11 @@ impl Orchestrator {
 
         // Fallback: Create single task from original message
         self.log("All parsing attempts failed, using fallback".to_string());
-        self.log(format!("Failed response was: {}", truncate_str(cleaned, 200)));
-        
+        self.log(format!(
+            "Failed response was: {}",
+            truncate_str(cleaned, 200)
+        ));
+
         Ok(TaskPlan {
             tasks: vec![Task {
                 id: 1,
@@ -224,7 +243,7 @@ impl Orchestrator {
     fn extract_json_from_markdown(&self, text: &str) -> Option<String> {
         // Look for ```json ... ``` or ``` ... ```
         let patterns = ["```json\n", "```json\r\n", "```\n", "```\r\n"];
-        
+
         for pattern in patterns {
             if let Some(start) = text.find(pattern) {
                 let content_start = start + pattern.len();
@@ -239,10 +258,10 @@ impl Orchestrator {
     fn extract_json_object(&self, text: &str) -> Option<String> {
         let start = text.find('{')?;
         let chars: Vec<char> = text[start..].chars().collect();
-        
+
         let mut depth = 0;
         let mut end = 0;
-        
+
         for (i, ch) in chars.iter().enumerate() {
             match ch {
                 '{' => depth += 1,
@@ -256,7 +275,7 @@ impl Orchestrator {
                 _ => {}
             }
         }
-        
+
         if end > 0 {
             Some(chars[..end].iter().collect())
         } else {
@@ -268,11 +287,11 @@ impl Orchestrator {
         // Find "tasks": [ ... ]
         let tasks_start = text.find("\"tasks\"")?;
         let array_start = text[tasks_start..].find('[')? + tasks_start;
-        
+
         let chars: Vec<char> = text[array_start..].chars().collect();
         let mut depth = 0;
         let mut end = 0;
-        
+
         for (i, ch) in chars.iter().enumerate() {
             match ch {
                 '[' => depth += 1,
@@ -286,7 +305,7 @@ impl Orchestrator {
                 _ => {}
             }
         }
-        
+
         if end > 0 {
             let array_str: String = chars[..end].iter().collect();
             if let Ok(tasks) = serde_json::from_str::<Vec<Task>>(&array_str) {
@@ -295,7 +314,7 @@ impl Orchestrator {
                 }
             }
         }
-        
+
         None
     }
 }
