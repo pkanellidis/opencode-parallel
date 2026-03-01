@@ -149,6 +149,9 @@ pub async fn handle_app_message(
         AppMessage::ReportToOrchestrator(ui_session_id, results) => {
             handle_report_to_orchestrator(app, ui_session_id, results, server, tx).await;
         }
+        AppMessage::CurrentModelLoaded(model) => {
+            app.set_current_model(model);
+        }
     }
 }
 
@@ -246,6 +249,7 @@ async fn handle_submit_input(
     } else {
         let session_id = app.current_session().id;
         let existing_orch_session = app.current_session().orchestrator_session_id.clone();
+        let current_model = app.current_model.clone();
         app.current_session_mut()
             .messages
             .push((format!("> {}", message), true));
@@ -264,6 +268,7 @@ async fn handle_submit_input(
                 .await;
 
             let mut orch = Orchestrator::new(server_clone.clone());
+            orch.set_model(current_model.clone());
 
             if let Some(orch_session_id) = existing_orch_session {
                 orch.set_session_id(orch_session_id);
@@ -307,6 +312,7 @@ async fn handle_submit_input(
                         let tx = tx_clone.clone();
                         let task_id = task.id;
                         let prompt = task.prompt.clone();
+                        let model = current_model.clone();
 
                         tokio::spawn(async move {
                             let _ = tx
@@ -333,12 +339,20 @@ async fn handle_submit_input(
                                         .send(AppMessage::WorkerOutput(
                                             session_id,
                                             task_id,
-                                            "Streaming response...".to_string(),
+                                            format!(
+                                                "Sending to model: {}...",
+                                                model.as_deref().unwrap_or("default")
+                                            ),
                                         ))
                                         .await;
 
-                                    if let Err(e) =
-                                        server.send_message_async(&session.id, &prompt).await
+                                    if let Err(e) = server
+                                        .send_message_async_with_model(
+                                            &session.id,
+                                            &prompt,
+                                            model.as_deref(),
+                                        )
+                                        .await
                                     {
                                         let _ = tx
                                             .send(AppMessage::WorkerError(
@@ -516,14 +530,19 @@ async fn handle_slash_command(
         SlashCommand::ModelSet(provider, model) => {
             let server_clone = server.clone();
             let tx_clone = tx.clone();
-            app.status = format!("Setting {}/{}...", provider, model);
+            let model_str = format!("{}/{}", provider, model);
+            app.status = format!("Setting {}...", model_str);
             tokio::spawn(async move {
                 match server_clone.set_model(&provider, &model).await {
                     Ok(()) => {
+                        // Update the displayed model
+                        let _ = tx_clone
+                            .send(AppMessage::CurrentModelLoaded(Some(model_str.clone())))
+                            .await;
                         let _ = tx_clone
                             .send(AppMessage::CommandResult(format!(
-                                "Model set to {}/{}",
-                                provider, model
+                                "Model set to {}",
+                                model_str
                             )))
                             .await;
                     }
@@ -626,6 +645,27 @@ async fn handle_slash_command(
                     Err(e) => {
                         let _ = tx_clone
                             .send(AppMessage::Error(format!("Failed: {}", e)))
+                            .await;
+                    }
+                }
+            });
+        }
+        SlashCommand::Config => {
+            let server_clone = server.clone();
+            let tx_clone = tx.clone();
+            tokio::spawn(async move {
+                match server_clone.get_config().await {
+                    Ok(config) => {
+                        // Format config as readable output
+                        let formatted = serde_json::to_string_pretty(&config)
+                            .unwrap_or_else(|_| format!("{:?}", config));
+                        let _ = tx_clone
+                            .send(AppMessage::CommandResult(format!("Config:\n{}", formatted)))
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = tx_clone
+                            .send(AppMessage::Error(format!("Failed to get config: {}", e)))
                             .await;
                     }
                 }
@@ -734,7 +774,8 @@ async fn handle_model_selector(
                 app.show_model_selector = false;
                 let server_clone = server.clone();
                 let tx_clone = tx.clone();
-                app.status = format!("Setting {}/{}...", selected.provider_id, selected.model_id);
+                let model_str = format!("{}/{}", selected.provider_id, selected.model_id);
+                app.status = format!("Setting {}...", model_str);
                 tokio::spawn(async move {
                     match server_clone
                         .set_model(&selected.provider_id, &selected.model_id)
@@ -742,10 +783,10 @@ async fn handle_model_selector(
                     {
                         Ok(()) => {
                             let _ = tx_clone
-                                .send(AppMessage::CommandResult(format!(
-                                    "Model: {}/{}",
-                                    selected.provider_id, selected.model_id
-                                )))
+                                .send(AppMessage::CurrentModelLoaded(Some(model_str.clone())))
+                                .await;
+                            let _ = tx_clone
+                                .send(AppMessage::CommandResult(format!("Model: {}", model_str)))
                                 .await;
                         }
                         Err(e) => {

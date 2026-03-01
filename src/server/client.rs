@@ -111,16 +111,43 @@ impl OpenCodeServer {
 
     /// Sends a message and waits for the complete response (blocking).
     pub async fn send_message(&self, session_id: &str, text: &str) -> Result<MessageResponse> {
+        self.send_message_with_model(session_id, text, None).await
+    }
+
+    /// Sends a message with a specific model and waits for the complete response.
+    /// Model should be in format "provider/model" (e.g., "opencode/minimax-m2.5-free")
+    pub async fn send_message_with_model(
+        &self,
+        session_id: &str,
+        text: &str,
+        model: Option<&str>,
+    ) -> Result<MessageResponse> {
         self.logs
             .log(format!("POST /session/{}/message", session_id));
         self.logs
             .log(format!("Message text: {}", truncate_str(text, 100)));
+        if let Some(m) = model {
+            self.logs.log(format!("Using model: {}", m));
+        }
+
+        let model_spec = model.and_then(|m| {
+            let parts: Vec<&str> = m.splitn(2, '/').collect();
+            if parts.len() == 2 {
+                Some(ModelSpec {
+                    provider_id: parts[0].to_string(),
+                    model_id: parts[1].to_string(),
+                })
+            } else {
+                None
+            }
+        });
 
         let req = SendMessageRequest {
             parts: vec![MessagePart {
                 part_type: "text".to_string(),
                 text: text.to_string(),
             }],
+            model: model_spec,
         };
 
         let resp = self
@@ -154,17 +181,50 @@ impl OpenCodeServer {
 
     /// Sends a message asynchronously (returns immediately, response via SSE).
     pub async fn send_message_async(&self, session_id: &str, text: &str) -> Result<()> {
+        self.send_message_async_with_model(session_id, text, None)
+            .await
+    }
+
+    /// Sends a message asynchronously with a specific model.
+    /// Model should be in format "provider/model" (e.g., "opencode/minimax-m2.5-free")
+    pub async fn send_message_async_with_model(
+        &self,
+        session_id: &str,
+        text: &str,
+        model: Option<&str>,
+    ) -> Result<()> {
         self.logs
             .log(format!("POST /session/{}/prompt_async", session_id));
         self.logs
             .log(format!("Message text: {}", truncate_str(text, 100)));
+        if let Some(m) = model {
+            self.logs.log(format!("Using model: {}", m));
+        }
+
+        let model_spec = model.and_then(|m| {
+            let parts: Vec<&str> = m.splitn(2, '/').collect();
+            if parts.len() == 2 {
+                Some(ModelSpec {
+                    provider_id: parts[0].to_string(),
+                    model_id: parts[1].to_string(),
+                })
+            } else {
+                None
+            }
+        });
 
         let req = SendMessageRequest {
             parts: vec![MessagePart {
                 part_type: "text".to_string(),
                 text: text.to_string(),
             }],
+            model: model_spec,
         };
+
+        // Log the actual request JSON for debugging
+        if let Ok(json) = serde_json::to_string(&req) {
+            self.logs.log(format!("Request JSON: {}", json));
+        }
 
         let response = self
             .client
@@ -307,9 +367,9 @@ impl OpenCodeServer {
             provider_id, model_id
         ));
 
+        // API expects model as string in format "provider/model"
         let body = serde_json::json!({
-            "provider": provider_id,
-            "model": model_id
+            "model": format!("{}/{}", provider_id, model_id)
         });
 
         let resp = self
@@ -731,5 +791,48 @@ mod tests {
         let logs = server.logs.get_logs();
         assert!(!logs.is_empty());
         assert!(logs[0].contains("Creating OpenCodeServer"));
+    }
+
+    #[test]
+    fn set_config_model_body_format() {
+        // /config API expects model as string in format "provider/model"
+        let provider_id = "opencode";
+        let model_id = "trinity-large-preview-free";
+
+        let body = serde_json::json!({
+            "model": format!("{}/{}", provider_id, model_id)
+        });
+
+        // Model should be a string in "provider/model" format
+        let model = body.get("model").unwrap();
+        assert!(model.is_string(), "model should be a string");
+        assert_eq!(
+            model.as_str().unwrap(),
+            "opencode/trinity-large-preview-free"
+        );
+    }
+
+    #[test]
+    fn message_model_spec_format() {
+        // /session/:id/message API expects model as object with providerID and modelID
+        let model_spec = ModelSpec {
+            provider_id: "opencode".to_string(),
+            model_id: "minimax-m2.5-free".to_string(),
+        };
+
+        let json = serde_json::to_value(&model_spec).unwrap();
+        assert!(json.is_object(), "model should be an object");
+        assert_eq!(json["providerID"], "opencode");
+        assert_eq!(json["modelID"], "minimax-m2.5-free");
+    }
+
+    #[test]
+    fn parse_model_string_to_spec() {
+        // Test parsing "provider/model" string into ModelSpec
+        let model_str = "opencode/minimax-m2.5-free";
+        let parts: Vec<&str> = model_str.splitn(2, '/').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "opencode");
+        assert_eq!(parts[1], "minimax-m2.5-free");
     }
 }

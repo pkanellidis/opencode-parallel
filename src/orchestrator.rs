@@ -17,29 +17,27 @@ const ORCHESTRATOR_SYSTEM_PROMPT: &str = r#"You are an AI task orchestrator. You
 When the user sends a request, respond ONLY with a JSON object in this exact format (no markdown, no code blocks, just raw JSON):
 {
   "tasks": [
-    {"id": 1, "description": "Brief task description", "prompt": "Full prompt for this task"},
-    {"id": 2, "description": "Brief task description", "prompt": "Full prompt for this task"}
+    {"id": 1, "description": "Brief task description", "prompt": "The exact user request or a portion of it"}
   ],
   "reasoning": "Brief explanation of why you split the tasks this way"
 }
 
 Rules:
-- If the task is simple and doesn't benefit from parallelization, return a single task
+- If the task is simple and doesn't benefit from parallelization, return a single task with the EXACT user request as the prompt
 - If the task can be split into independent subtasks, create multiple tasks
 - Each task should be self-contained and not depend on other tasks' outputs
 - Maximum 8 tasks
 - Keep descriptions under 50 characters
-- The prompt should be detailed enough for another AI to execute
+- IMPORTANT: The "prompt" field should contain the user's original request or a subset of it verbatim. Do NOT rewrite, rephrase, or add instructions. Do NOT add any information about yourself or any AI model.
 
 Examples of when to split:
 - "Create a web app with auth and database" -> Split into frontend, backend, auth, database tasks
 - "Write tests for modules A, B, and C" -> One task per module
-- "Refactor and add logging to the codebase" -> Could be one task or split by component
 
-Examples of single task:
-- "Explain how async/await works" -> Single task
-- "Fix the bug in login.js" -> Single task
-- "What's the best way to structure this?" -> Single task
+Examples of single task (use EXACT user prompt):
+- User: "Explain how async/await works" -> prompt: "Explain how async/await works"
+- User: "Fix the bug in login.js" -> prompt: "Fix the bug in login.js"
+- User: "What model are you?" -> prompt: "What model are you?"
 
 IMPORTANT: Respond ONLY with valid JSON, no other text, no markdown code blocks."#;
 
@@ -61,6 +59,7 @@ pub struct Orchestrator {
     server: OpenCodeServer,
     session_id: Option<String>,
     logs: Vec<String>,
+    model: Option<String>,
 }
 
 impl Orchestrator {
@@ -69,7 +68,12 @@ impl Orchestrator {
             server,
             session_id: None,
             logs: Vec::new(),
+            model: None,
         }
+    }
+
+    pub fn set_model(&mut self, model: Option<String>) {
+        self.model = model;
     }
 
     fn log(&mut self, message: String) {
@@ -143,7 +147,13 @@ impl Orchestrator {
         );
 
         self.log("Sending request to orchestrator AI...".to_string());
-        let response = self.server.send_message(&session_id, &prompt).await?;
+        if let Some(ref m) = self.model {
+            self.log(format!("Using model: {}", m));
+        }
+        let response = self
+            .server
+            .send_message_with_model(&session_id, &prompt, self.model.as_deref())
+            .await?;
 
         let mut full_text = String::new();
         for part in response.parts {
@@ -328,6 +338,7 @@ mod tests {
             server: OpenCodeServer::new(4096),
             session_id: Some("test".to_string()),
             logs: Vec::new(),
+            model: None,
         }
     }
 

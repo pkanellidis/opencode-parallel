@@ -31,6 +31,8 @@ pub enum SlashCommand {
     ModelSet(String, String),
     /// Reply to a worker's question (worker_id, message).
     Reply(u32, String),
+    /// Show current config.
+    Config,
     /// Unknown command.
     Unknown(String),
 }
@@ -92,6 +94,10 @@ pub const COMMAND_SUGGESTIONS: &[CommandSuggestion] = &[
     CommandSuggestion {
         command: "/clear",
         description: "Clear chat messages",
+    },
+    CommandSuggestion {
+        command: "/config",
+        description: "Show current server config",
     },
 ];
 
@@ -177,6 +183,8 @@ pub fn parse_slash_command(input: &str) -> Option<SlashCommand> {
         "path" | "pwd" => Some(SlashCommand::Path),
 
         "clear" | "cls" => Some(SlashCommand::Clear),
+
+        "config" | "cfg" => Some(SlashCommand::Config),
 
         "reply" | "r" => {
             if parts.len() > 2 {
@@ -338,6 +346,12 @@ mod tests {
         fn parses_clear() {
             assert_eq!(parse_slash_command("/clear"), Some(SlashCommand::Clear));
             assert_eq!(parse_slash_command("/cls"), Some(SlashCommand::Clear));
+        }
+
+        #[test]
+        fn parses_config() {
+            assert_eq!(parse_slash_command("/config"), Some(SlashCommand::Config));
+            assert_eq!(parse_slash_command("/cfg"), Some(SlashCommand::Config));
         }
 
         #[test]

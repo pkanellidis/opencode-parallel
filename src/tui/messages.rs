@@ -77,6 +77,8 @@ pub enum AppMessage {
     ModelsLoaded(Vec<ModelOption>),
     /// Report worker results to orchestrator.
     ReportToOrchestrator(usize, String),
+    /// Current model info loaded.
+    CurrentModelLoaded(Option<String>),
 }
 
 #[cfg(test)]

@@ -66,6 +66,8 @@ pub struct App {
     pub selection: Option<TextSelection>,
     /// Content lines for the main view (used for selection/copy).
     pub content_lines: Vec<String>,
+    /// Currently selected model (provider/model).
+    pub current_model: Option<String>,
 }
 
 impl App {
@@ -101,7 +103,13 @@ impl App {
             main_scroll: 0,
             selection: None,
             content_lines: Vec::new(),
+            current_model: None,
         }
+    }
+
+    /// Sets the current model display string.
+    pub fn set_current_model(&mut self, model: Option<String>) {
+        self.current_model = model;
     }
 
     /// Clears the current text selection.
@@ -406,5 +414,50 @@ mod tests {
         app.show_logs = false;
         app.show_model_selector = true;
         assert!(app.has_dialog_open());
+    }
+
+    #[test]
+    fn show_logs_toggle() {
+        let mut app = create_test_app();
+        assert!(!app.show_logs);
+
+        app.show_logs = true;
+        assert!(app.show_logs);
+        assert!(app.has_dialog_open());
+
+        app.show_logs = false;
+        assert!(!app.show_logs);
+    }
+
+    #[test]
+    fn orchestrator_logs_can_be_added() {
+        let mut app = create_test_app();
+        assert!(app.orchestrator_logs.is_empty());
+
+        app.log("Test log message".to_string());
+        assert_eq!(app.orchestrator_logs.len(), 1);
+        assert_eq!(app.orchestrator_logs[0], "Test log message");
+
+        app.log("Another log".to_string());
+        assert_eq!(app.orchestrator_logs.len(), 2);
+    }
+
+    #[test]
+    fn logs_scroll_defaults_to_zero() {
+        let app = create_test_app();
+        assert_eq!(app.logs_scroll, 0);
+    }
+
+    #[test]
+    fn logs_scroll_can_be_modified() {
+        let mut app = create_test_app();
+        app.logs_scroll = 10;
+        assert_eq!(app.logs_scroll, 10);
+
+        app.logs_scroll = app.logs_scroll.saturating_sub(5);
+        assert_eq!(app.logs_scroll, 5);
+
+        app.logs_scroll = app.logs_scroll.saturating_add(3);
+        assert_eq!(app.logs_scroll, 8);
     }
 }

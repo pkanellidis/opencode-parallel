@@ -114,10 +114,21 @@ pub(crate) struct CreateSessionRequest {
     pub title: Option<String>,
 }
 
+/// Model specification for a message request.
+#[derive(Debug, Serialize)]
+pub(crate) struct ModelSpec {
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    #[serde(rename = "modelID")]
+    pub model_id: String,
+}
+
 /// Request to send a message.
 #[derive(Debug, Serialize)]
 pub(crate) struct SendMessageRequest {
     pub parts: Vec<MessagePart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelSpec>,
 }
 
 /// A part of a message being sent.

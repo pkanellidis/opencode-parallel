@@ -68,6 +68,19 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
 
     let (tx, mut rx) = mpsc::channel::<AppMessage>(100);
 
+    // Fetch current model on startup
+    let server_clone = server.clone();
+    let tx_clone = tx.clone();
+    tokio::spawn(async move {
+        if let Ok(config) = server_clone.get_config().await {
+            let model = config
+                .get("model")
+                .and_then(|m| m.as_str())
+                .map(String::from);
+            let _ = tx_clone.send(AppMessage::CurrentModelLoaded(model)).await;
+        }
+    });
+
     let (sse_tx, mut sse_rx) = mpsc::channel::<StreamEvent>(100);
     server.subscribe_events(sse_tx);
 
