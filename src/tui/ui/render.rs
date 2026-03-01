@@ -2,7 +2,7 @@
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Style, Stylize},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{
         Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -16,6 +16,50 @@ use crate::utils::truncate_str;
 
 use super::dialogs::{render_autocomplete, render_model_selector, render_permission_dialog};
 use super::theme::*;
+
+/// Wraps text to fit within a given width, returning multiple lines.
+fn wrap_text(text: &str, width: usize, indent: &str) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let effective_width = width.saturating_sub(indent.len());
+
+    if effective_width == 0 {
+        return vec![format!("{}{}", indent, text)];
+    }
+
+    let mut current_line = String::new();
+    let mut current_len = 0;
+
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+
+        if current_len == 0 {
+            current_line = word.to_string();
+            current_len = word_len;
+        } else if current_len + 1 + word_len <= effective_width {
+            current_line.push(' ');
+            current_line.push_str(word);
+            current_len += 1 + word_len;
+        } else {
+            lines.push(format!("{}{}", indent, current_line));
+            current_line = word.to_string();
+            current_len = word_len;
+        }
+    }
+
+    if !current_line.is_empty() {
+        lines.push(format!("{}{}", indent, current_line));
+    }
+
+    if lines.is_empty() {
+        lines.push(format!("{}{}", indent, text));
+    }
+
+    lines
+}
 
 /// Main UI rendering entry point.
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -36,7 +80,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
-    if has_workers {
+    // Check if logs panel should be shown
+    if app.show_logs {
+        render_logs_panel(f, app, main_layout[0]);
+    } else if has_workers {
         // Split into workers sidebar and main content
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -256,63 +303,72 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     // Clone messages to avoid borrow conflicts
     let messages: Vec<(String, bool)> = app.current_session().messages.clone();
     let scroll_offset = app.current_session().scroll_offset;
+    let wrap_width = area.width.saturating_sub(2) as usize; // Leave room for indent and scrollbar
 
     // Build lines with background info and plain text for selection
     let mut styled_lines: Vec<(Line, bool, String)> = Vec::new(); // (line, is_user, plain_text)
 
     for (msg, is_user) in &messages {
         if *is_user {
-            let plain = format!("› {}", msg);
-            styled_lines.push((
-                Line::from(vec![
-                    Span::styled("› ", Style::default().fg(ACCENT)),
-                    Span::styled(msg.as_str(), Style::default().fg(TEXT_PRIMARY)),
-                ]),
-                true,
-                plain,
-            ));
+            // User messages - wrap if needed
+            let wrapped = wrap_text(msg, wrap_width.saturating_sub(2), "");
+            for (i, line) in wrapped.iter().enumerate() {
+                let prefix = if i == 0 { "› " } else { "  " };
+                let plain = format!("{}{}", prefix, line);
+                styled_lines.push((
+                    Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(ACCENT)),
+                        Span::styled(line.clone(), Style::default().fg(TEXT_PRIMARY)),
+                    ]),
+                    true,
+                    plain,
+                ));
+            }
         } else if msg.is_empty() {
             styled_lines.push((Line::from(""), false, String::new()));
         } else if msg.starts_with("Plan:") || msg.starts_with("Spawning") {
-            let plain = format!("  {}", msg);
-            styled_lines.push((
-                Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(msg.as_str(), Style::default().fg(ACCENT_SECONDARY)),
-                ]),
-                false,
-                plain,
-            ));
+            let wrapped = wrap_text(msg, wrap_width, "  ");
+            for line in wrapped {
+                styled_lines.push((
+                    Line::from(Span::styled(
+                        line.clone(),
+                        Style::default().fg(ACCENT_SECONDARY),
+                    )),
+                    false,
+                    line,
+                ));
+            }
         } else if msg.starts_with("Error") || msg.starts_with("✗") {
-            let plain = format!("  {}", msg);
-            styled_lines.push((
-                Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(msg.as_str(), Style::default().fg(ERROR)),
-                ]),
-                false,
-                plain,
-            ));
+            // Error messages - wrap to multiple lines
+            let wrapped = wrap_text(msg, wrap_width, "  ");
+            for line in wrapped {
+                styled_lines.push((
+                    Line::from(Span::styled(line.clone(), Style::default().fg(ERROR))),
+                    false,
+                    line,
+                ));
+            }
         } else if msg.starts_with("---") || msg.starts_with("Worker #") {
-            let plain = format!("  {}", msg);
-            styled_lines.push((
-                Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(msg.as_str(), Style::default().fg(SUCCESS)),
-                ]),
-                false,
-                plain,
-            ));
+            let wrapped = wrap_text(msg, wrap_width, "  ");
+            for line in wrapped {
+                styled_lines.push((
+                    Line::from(Span::styled(line.clone(), Style::default().fg(SUCCESS))),
+                    false,
+                    line,
+                ));
+            }
         } else {
-            let plain = format!("  {}", msg);
-            styled_lines.push((
-                Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(msg.as_str(), Style::default().fg(TEXT_SECONDARY)),
-                ]),
-                false,
-                plain,
-            ));
+            let wrapped = wrap_text(msg, wrap_width, "  ");
+            for line in wrapped {
+                styled_lines.push((
+                    Line::from(Span::styled(
+                        line.clone(),
+                        Style::default().fg(TEXT_SECONDARY),
+                    )),
+                    false,
+                    line,
+                ));
+            }
         }
     }
 
@@ -585,6 +641,146 @@ fn render_worker_output(
     }
 }
 
+/// Renders the logs panel overlay.
+fn render_logs_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let block = Block::default()
+        .title(" Orchestrator Logs (press 'l' or Esc to close) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BG_PANEL));
+
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+
+    let logs = &app.orchestrator_logs;
+    let total_lines = logs.len();
+    let visible_height = inner.height as usize;
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let scroll = app.logs_scroll.min(max_scroll);
+
+    // Populate content_lines for selection
+    app.content_lines.clear();
+    for row in 0..f.area().height {
+        if row < inner.y || row >= inner.y + inner.height {
+            app.content_lines.push(String::new());
+        } else {
+            let line_idx = scroll + (row - inner.y) as usize;
+            if let Some(log) = logs.get(line_idx) {
+                app.content_lines.push(log.clone());
+            } else {
+                app.content_lines.push(String::new());
+            }
+        }
+    }
+
+    // Render lines with selection highlighting
+    for (i, line_idx) in (scroll..scroll + visible_height).enumerate() {
+        let y = inner.y + i as u16;
+        if y >= inner.y + inner.height {
+            break;
+        }
+
+        if let Some(log) = logs.get(line_idx) {
+            let line_area = Rect {
+                x: inner.x,
+                y,
+                width: inner.width.saturating_sub(1),
+                height: 1,
+            };
+
+            let fg = if log.contains("[ERROR]") || log.contains("Error") {
+                ERROR
+            } else if log.contains("[WARN]") {
+                WARNING
+            } else if log.contains("[SSE]") || log.contains("[PERM]") {
+                ACCENT_SECONDARY
+            } else if log.contains("[WORKER]") {
+                STATUS_RUNNING
+            } else {
+                TEXT_SECONDARY
+            };
+
+            // Check for selection
+            if let Some(ref sel) = app.selection {
+                let line_end = inner.x + log.len() as u16;
+                if let Some((col_start, col_end)) = sel.row_range(y, line_end) {
+                    let rel_start = col_start.saturating_sub(inner.x) as usize;
+                    let rel_end = col_end.saturating_sub(inner.x) as usize;
+                    render_line_with_selection_and_color(f, log, line_area, rel_start, rel_end, fg);
+                    continue;
+                }
+            }
+
+            let line = Line::styled(log.as_str(), Style::default().fg(fg));
+            f.render_widget(Paragraph::new(line), line_area);
+        }
+    }
+
+    // Scrollbar
+    if total_lines > visible_height {
+        let scrollbar_area = Rect {
+            x: inner.x + inner.width,
+            y: inner.y,
+            width: 1,
+            height: inner.height,
+        };
+
+        let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
+        let scrollbar =
+            Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(BORDER));
+
+        f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
+
+    // Show scroll position
+    if total_lines > 0 {
+        let pos_text = format!(
+            " {}/{} ",
+            scroll + visible_height.min(total_lines),
+            total_lines
+        );
+        let pos_width = pos_text.len() as u16;
+        if inner.width > pos_width {
+            let pos_area = Rect {
+                x: inner.x + inner.width - pos_width,
+                y: area.y,
+                width: pos_width,
+                height: 1,
+            };
+            let pos_para = Paragraph::new(Span::styled(pos_text, Style::default().fg(TEXT_DIM)));
+            f.render_widget(pos_para, pos_area);
+        }
+    }
+}
+
+/// Renders a line with selection highlighting and custom foreground color.
+fn render_line_with_selection_and_color(
+    f: &mut Frame,
+    text: &str,
+    area: Rect,
+    sel_start: usize,
+    sel_end: usize,
+    fg: Color,
+) {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+
+    let start = sel_start.min(len);
+    let end = sel_end.min(len);
+
+    let before: String = chars[..start].iter().collect();
+    let selected: String = chars[start..end].iter().collect();
+    let after: String = chars[end..].iter().collect();
+
+    let spans = vec![
+        Span::styled(before, Style::default().fg(fg)),
+        Span::styled(selected, Style::default().fg(fg).bg(SELECTION_BG)),
+        Span::styled(after, Style::default().fg(fg)),
+    ];
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 /// Renders the sticky input box at the bottom.
 fn render_input_box(f: &mut Frame, app: &App, area: Rect) {
     let is_active = app.input_mode;
@@ -636,6 +832,23 @@ fn render_input_box(f: &mut Frame, app: &App, area: Rect) {
     let input_line = Paragraph::new(Line::from(spans));
     f.render_widget(input_line, inner);
 
+    // Show current model on second line if available
+    if inner.height > 1 {
+        if let Some(ref model) = app.current_model {
+            let model_line = Paragraph::new(Line::from(vec![
+                Span::styled("Model: ", Style::default().fg(TEXT_DIM)),
+                Span::styled(model, Style::default().fg(ACCENT_SECONDARY)),
+            ]));
+            let model_area = Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: inner.width,
+                height: 1,
+            };
+            f.render_widget(model_line, model_area);
+        }
+    }
+
     // Status hint on right side
     let hint = if is_active {
         "Enter to send · Esc to cancel"
@@ -658,8 +871,95 @@ fn render_input_box(f: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::server::OpenCodeServer;
+    use crate::tui::App;
+
+    fn create_test_app() -> App {
+        let server = OpenCodeServer::new(4096);
+        App::new(server)
+    }
+
     #[test]
     fn render_functions_exist() {
         assert!(true);
+    }
+
+    #[test]
+    fn app_show_logs_affects_rendering_path() {
+        let mut app = create_test_app();
+
+        // Initially logs are hidden
+        assert!(!app.show_logs);
+
+        // When show_logs is true, the logs panel should be rendered
+        app.show_logs = true;
+        assert!(app.show_logs);
+
+        // Add some logs to verify they exist
+        app.orchestrator_logs.push("[TEST] Log entry 1".to_string());
+        app.orchestrator_logs
+            .push("[ERROR] Error entry".to_string());
+        assert_eq!(app.orchestrator_logs.len(), 2);
+    }
+
+    #[test]
+    fn logs_scroll_bounds() {
+        let mut app = create_test_app();
+
+        // Add logs
+        for i in 0..100 {
+            app.orchestrator_logs.push(format!("Log line {}", i));
+        }
+
+        // Scroll should be bounded
+        app.logs_scroll = 50;
+        assert_eq!(app.logs_scroll, 50);
+
+        // Saturating sub prevents underflow
+        app.logs_scroll = app.logs_scroll.saturating_sub(100);
+        assert_eq!(app.logs_scroll, 0);
+    }
+
+    #[test]
+    fn wrap_text_short_text_unchanged() {
+        let result = wrap_text("short text", 50, "  ");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "  short text");
+    }
+
+    #[test]
+    fn wrap_text_long_text_wraps() {
+        let long_text =
+            "This is a very long error message that should be wrapped across multiple lines";
+        let result = wrap_text(long_text, 30, "  ");
+        assert!(result.len() > 1, "Long text should wrap to multiple lines");
+        for line in &result {
+            assert!(line.starts_with("  "), "Each line should have indent");
+        }
+    }
+
+    #[test]
+    fn wrap_text_preserves_words() {
+        let text = "word1 word2 word3";
+        let result = wrap_text(text, 15, "");
+        // Should not break words in the middle
+        for line in &result {
+            assert!(!line.contains("wor "), "Words should not be broken");
+        }
+    }
+
+    #[test]
+    fn wrap_text_empty_returns_indented_empty() {
+        let result = wrap_text("", 50, "  ");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "  ");
+    }
+
+    #[test]
+    fn wrap_text_handles_zero_width() {
+        let result = wrap_text("test", 0, "");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "test");
     }
 }
