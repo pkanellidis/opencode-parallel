@@ -1,10 +1,13 @@
 //! Main rendering functions for the TUI.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style, Stylize},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Wrap,
+    },
     Frame,
 };
 
@@ -13,200 +16,359 @@ use crate::tui::worker::WorkerState;
 use crate::utils::truncate_str;
 
 use super::dialogs::{render_autocomplete, render_model_selector, render_permission_dialog};
+use super::theme::*;
 
 /// Main UI rendering entry point.
 pub fn ui(f: &mut Frame, app: &App) {
-    let chunks = Layout::default()
+    // Fill entire screen with black background
+    let bg_block = Block::default().style(Style::default().bg(BG_PRIMARY));
+    f.render_widget(bg_block, f.area());
+
+    let session = app.current_session();
+    let has_workers = !session.workers.is_empty();
+
+    // Layout: main content area + sticky input at bottom
+    let main_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(3),
-            Constraint::Length(3),
+            Constraint::Min(0),    // Main content (scrollable)
+            Constraint::Length(4), // Input box (sticky)
         ])
         .split(f.area());
 
-    render_session_tabs(f, app, chunks[0]);
-
-    if app.show_logs {
-        render_logs(f, app, chunks[1]);
-    } else {
-        let main_chunks = Layout::default()
+    if has_workers {
+        // Split into workers sidebar and main content
+        let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(chunks[1]);
+            .constraints([
+                Constraint::Length(32), // Workers sidebar
+                Constraint::Min(0),     // Main content
+            ])
+            .split(main_layout[0]);
 
-        render_workers(f, app, main_chunks[0]);
-        render_main_panel(f, app, main_chunks[1]);
+        render_workers_sidebar(f, app, content_layout[0]);
+        render_main_content(f, app, content_layout[1]);
+    } else {
+        // Landing view - just show welcome/prompt area
+        render_landing(f, app, main_layout[0]);
     }
 
-    render_input(f, app, chunks[2]);
-    render_autocomplete(f, app, chunks[2]);
+    // Sticky input at bottom
+    render_input_box(f, app, main_layout[1]);
+
+    // Overlays
+    render_autocomplete(f, app, main_layout[1]);
     render_model_selector(f, app);
     render_permission_dialog(f, app);
-    render_status(f, app, chunks[3]);
 }
 
-/// Renders the session tabs at the top of the screen.
-pub fn render_session_tabs(f: &mut Frame, app: &App, area: Rect) {
-    let tabs: Vec<Span> = app
-        .sessions
-        .iter()
-        .enumerate()
-        .flat_map(|(i, session)| {
-            let worker_count = session.workers.len();
-            let running = session
-                .workers
-                .iter()
-                .filter(|w| matches!(w.state, WorkerState::Running | WorkerState::Starting))
-                .count();
+/// Renders the landing view when no workers are active.
+fn render_landing(f: &mut Frame, app: &App, area: Rect) {
+    // Center the content vertically
+    let vertical_center = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(35),
+            Constraint::Min(0),
+            Constraint::Percentage(35),
+        ])
+        .split(area);
 
-            let indicator = if running > 0 {
-                format!(" ◐{}", running)
-            } else if worker_count > 0 {
-                format!(" ●{}", worker_count)
-            } else {
-                String::new()
-            };
+    let content_area = vertical_center[1];
 
-            let label = format!(" {}{} ", session.name, indicator);
+    // Center horizontally
+    let horizontal_center = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(15),
+            Constraint::Percentage(70),
+            Constraint::Percentage(15),
+        ])
+        .split(content_area);
 
-            let style = if i == app.current_session {
-                Style::default().fg(Color::Black).bg(Color::Cyan).bold()
-            } else {
-                Style::default().fg(Color::Gray)
-            };
+    let center = horizontal_center[1];
 
-            vec![Span::styled(label, style), Span::raw(" ")]
-        })
-        .collect();
+    // Title and instructions
+    let title_lines = vec![
+        Line::from(vec![
+            Span::styled("opencode", Style::default().fg(ACCENT).bold()),
+            Span::styled("-parallel", Style::default().fg(TEXT_SECONDARY)),
+        ]),
+        Line::from(""),
+        Line::styled(
+            "Run multiple opencode instances in parallel",
+            Style::default().fg(TEXT_SECONDARY),
+        ),
+        Line::from(""),
+        Line::from(""),
+        Line::styled(
+            "Describe your task below. The orchestrator will break it down",
+            Style::default().fg(TEXT_DIM),
+        ),
+        Line::styled(
+            "into subtasks and spawn parallel workers.",
+            Style::default().fg(TEXT_DIM),
+        ),
+    ];
 
-    let line = Line::from(tabs);
-    let paragraph = Paragraph::new(line);
-    f.render_widget(paragraph, area);
-}
+    let title = Paragraph::new(title_lines).alignment(Alignment::Center);
 
-/// Renders the orchestrator logs panel.
-pub fn render_logs(f: &mut Frame, app: &App, area: Rect) {
-    let total_logs = app.orchestrator_logs.len();
+    f.render_widget(title, center);
 
-    let lines: Vec<Line> = app
-        .orchestrator_logs
-        .iter()
-        .map(|log| {
-            let style = if log.contains("Success")
-                || log.contains("[SPAWN]")
-                || log.contains("[WORKER]")
-            {
-                Style::default().fg(Color::Green)
-            } else if log.contains("Failed") || log.contains("error") || log.contains("Error") {
-                Style::default().fg(Color::Red)
-            } else if log.contains("Attempt") || log.contains("[QUESTION]") || log.contains("[IDLE")
-            {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            Line::styled(log.as_str(), style)
-        })
-        .collect();
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(format!(
-                    " Orchestrator Logs ({}) - scroll or l to close ",
-                    total_logs
-                ))
-                .title_style(Style::default().fg(Color::Magenta).bold())
-                .border_style(Style::default().fg(Color::Magenta)),
-        )
-        .scroll((app.logs_scroll as u16, 0));
-
-    f.render_widget(paragraph, area);
-}
-
-/// Renders the workers panel on the left side.
-pub fn render_workers(f: &mut Frame, app: &App, area: Rect) {
+    // Show session messages if any
     let session = app.current_session();
+    if !session.messages.is_empty() {
+        let msg_area = Rect {
+            x: area.x + 4,
+            y: area.y + 2,
+            width: area.width.saturating_sub(8),
+            height: area.height.saturating_sub(4),
+        };
+        render_messages(f, app, msg_area);
+    }
+}
+
+/// Renders the workers sidebar.
+fn render_workers_sidebar(f: &mut Frame, app: &App, area: Rect) {
+    let session = app.current_session();
+
+    let inner_area = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(1),
+    };
+
+    // Panel background
+    let panel = Block::default()
+        .style(Style::default().bg(BG_PANEL))
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(BORDER));
+    f.render_widget(panel, area);
+
+    // Header
+    let running = session
+        .workers
+        .iter()
+        .filter(|w| matches!(w.state, WorkerState::Running | WorkerState::Starting))
+        .count();
+    let complete = session
+        .workers
+        .iter()
+        .filter(|w| w.state == WorkerState::Complete)
+        .count();
+
+    let header = if running > 0 {
+        Line::from(vec![
+            Span::styled("Workers ", Style::default().fg(TEXT_PRIMARY).bold()),
+            Span::styled(
+                format!("({} running)", running),
+                Style::default().fg(STATUS_RUNNING),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Workers ", Style::default().fg(TEXT_PRIMARY).bold()),
+            Span::styled(
+                format!("({}/{})", complete, session.workers.len()),
+                Style::default().fg(SUCCESS),
+            ),
+        ])
+    };
+
+    let header_para = Paragraph::new(header);
+    let header_area = Rect {
+        x: inner_area.x,
+        y: inner_area.y,
+        width: inner_area.width,
+        height: 1,
+    };
+    f.render_widget(header_para, header_area);
+
+    // Workers list
+    let list_area = Rect {
+        x: inner_area.x,
+        y: inner_area.y + 2,
+        width: inner_area.width,
+        height: inner_area.height.saturating_sub(3),
+    };
+
     let items: Vec<ListItem> = session
         .workers
         .iter()
         .enumerate()
         .map(|(i, worker)| {
-            let icon = match worker.state {
-                WorkerState::Starting => "◌",
-                WorkerState::Running => "◐",
-                WorkerState::WaitingForInput => "❓",
-                WorkerState::Complete => "●",
-                WorkerState::Error => "✗",
+            let (icon, icon_color) = match worker.state {
+                WorkerState::Starting => ("◌", STATUS_RUNNING),
+                WorkerState::Running => ("●", STATUS_RUNNING),
+                WorkerState::WaitingForInput => ("?", STATUS_WAITING),
+                WorkerState::Complete => ("✓", SUCCESS),
+                WorkerState::Error => ("✗", ERROR),
             };
 
-            let style = if Some(i) == session.selected_worker {
-                Style::default().fg(Color::Cyan).bg(Color::DarkGray).bold()
+            let is_selected = Some(i) == session.selected_worker;
+            let bg = if is_selected { BG_SELECTED } else { BG_PANEL };
+            let text_color = if is_selected {
+                TEXT_PRIMARY
             } else {
-                Style::default()
+                TEXT_SECONDARY
             };
 
-            let text = format!(
-                "{} #{} {}",
-                icon,
-                worker.id,
-                truncate_str(&worker.description, 17)
-            );
+            let line = Line::from(vec![
+                Span::styled(format!(" {} ", icon), Style::default().fg(icon_color)),
+                Span::styled(format!("#{} ", worker.id), Style::default().fg(TEXT_DIM)),
+                Span::styled(
+                    truncate_str(&worker.description, 18),
+                    Style::default().fg(text_color),
+                ),
+            ]);
 
-            ListItem::new(Line::styled(text, style))
+            ListItem::new(line).style(Style::default().bg(bg))
         })
         .collect();
 
-    let title = if session.workers.is_empty() {
-        " Workers (none) ".to_string()
-    } else {
-        let done = session
-            .workers
-            .iter()
-            .filter(|w| matches!(w.state, WorkerState::Complete))
-            .count();
-        format!(" Workers ({}/{} done) ", done, session.workers.len())
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(title)
-            .title_style(Style::default().fg(Color::Yellow).bold())
-            .border_style(Style::default().fg(Color::Yellow)),
-    );
-
-    f.render_widget(list, area);
+    let list = List::new(items);
+    f.render_widget(list, list_area);
 }
 
-/// Renders the main content panel (worker output or session messages).
-pub fn render_main_panel(f: &mut Frame, app: &App, area: Rect) {
+/// Renders the main content area (messages or worker output).
+fn render_main_content(f: &mut Frame, app: &App, area: Rect) {
     let session = app.current_session();
+
+    // Panel background
+    let panel = Block::default().style(Style::default().bg(BG_PANEL));
+    f.render_widget(panel, area);
+
+    let inner_area = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
 
     if let Some(idx) = session.selected_worker {
         if let Some(worker) = session.workers.get(idx) {
-            render_worker_output(f, app, worker, area);
+            render_worker_output(f, app, worker, inner_area);
             return;
         }
     }
 
-    render_session_messages(f, session, area);
+    render_messages(f, app, inner_area);
 }
 
-/// Renders the output for a selected worker.
+/// Renders the message history.
+fn render_messages(f: &mut Frame, app: &App, area: Rect) {
+    let session = app.current_session();
+
+    let lines: Vec<Line> = session
+        .messages
+        .iter()
+        .map(|(msg, is_user)| {
+            if *is_user {
+                Line::from(vec![
+                    Span::styled("› ", Style::default().fg(ACCENT)),
+                    Span::styled(msg.as_str(), Style::default().fg(TEXT_PRIMARY)),
+                ])
+            } else if msg.starts_with("Plan:") || msg.starts_with("Spawning") {
+                Line::styled(msg.as_str(), Style::default().fg(ACCENT_SECONDARY))
+            } else if msg.starts_with("Error") || msg.starts_with("✗") {
+                Line::styled(msg.as_str(), Style::default().fg(ERROR))
+            } else if msg.starts_with("---") || msg.starts_with("Worker #") {
+                Line::styled(msg.as_str(), Style::default().fg(SUCCESS))
+            } else {
+                Line::styled(msg.as_str(), Style::default().fg(TEXT_SECONDARY))
+            }
+        })
+        .collect();
+
+    let total_lines = lines.len();
+    let visible_height = area.height as usize;
+    let scroll = session
+        .scroll_offset
+        .min(total_lines.saturating_sub(visible_height));
+
+    let paragraph = Paragraph::new(lines)
+        .scroll((scroll as u16, 0))
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, area);
+
+    // Scrollbar if needed
+    if total_lines > visible_height {
+        let scrollbar_area = Rect {
+            x: area.x + area.width - 1,
+            y: area.y,
+            width: 1,
+            height: area.height,
+        };
+
+        let mut scrollbar_state =
+            ScrollbarState::new(total_lines.saturating_sub(visible_height)).position(scroll);
+
+        let scrollbar =
+            Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(BORDER));
+
+        f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
+}
+
+/// Renders a worker's output.
 fn render_worker_output(f: &mut Frame, app: &App, worker: &crate::tui::worker::Worker, area: Rect) {
     let session = app.current_session();
-    let display_lines = worker.get_display_lines();
-    let output_height = area.height.saturating_sub(2) as usize;
 
+    // Header with worker info
+    let (status_text, status_color) = match worker.state {
+        WorkerState::Starting => ("Starting...", STATUS_RUNNING),
+        WorkerState::Running => ("Running", STATUS_RUNNING),
+        WorkerState::WaitingForInput => ("Waiting for input", STATUS_WAITING),
+        WorkerState::Complete => ("Complete", SUCCESS),
+        WorkerState::Error => ("Error", ERROR),
+    };
+
+    let header = Line::from(vec![
+        Span::styled(
+            format!("Worker #{}", worker.id),
+            Style::default().fg(ACCENT).bold(),
+        ),
+        Span::styled(" · ", Style::default().fg(TEXT_DIM)),
+        Span::styled(&worker.description, Style::default().fg(TEXT_SECONDARY)),
+        Span::styled(" · ", Style::default().fg(TEXT_DIM)),
+        Span::styled(status_text, Style::default().fg(status_color)),
+    ]);
+
+    let header_para = Paragraph::new(header);
+    let header_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    f.render_widget(header_para, header_area);
+
+    // Separator
+    let sep = Line::styled("─".repeat(area.width as usize), Style::default().fg(BORDER));
+    let sep_area = Rect {
+        x: area.x,
+        y: area.y + 1,
+        width: area.width,
+        height: 1,
+    };
+    f.render_widget(Paragraph::new(sep), sep_area);
+
+    // Output content
+    let content_area = Rect {
+        x: area.x,
+        y: area.y + 3,
+        width: area.width,
+        height: area.height.saturating_sub(3),
+    };
+
+    let display_lines = worker.get_display_lines();
     let total_lines = display_lines.len();
-    let max_scroll = total_lines.saturating_sub(output_height);
+    let visible_height = content_area.height as usize;
+
     let auto_scroll = worker.state == WorkerState::Running;
+    let max_scroll = total_lines.saturating_sub(visible_height);
     let scroll = if auto_scroll {
         max_scroll
     } else {
@@ -215,100 +377,61 @@ fn render_worker_output(f: &mut Frame, app: &App, worker: &crate::tui::worker::W
 
     let lines: Vec<Line> = display_lines
         .iter()
-        .skip(scroll)
-        .take(output_height)
         .map(|line| {
-            if line.starts_with('✓') {
-                Line::styled(line.as_str(), Style::default().fg(Color::Green))
-            } else if line.starts_with('✗') {
-                Line::styled(line.as_str(), Style::default().fg(Color::Red))
-            } else if line.starts_with('⚙') || line.starts_with('🚀') {
-                Line::styled(line.as_str(), Style::default().fg(Color::Yellow))
+            if line.starts_with('✓') || line.starts_with("Complete") {
+                Line::styled(line.as_str(), Style::default().fg(SUCCESS))
+            } else if line.starts_with('✗') || line.starts_with("Error") {
+                Line::styled(line.as_str(), Style::default().fg(ERROR))
+            } else if line.starts_with("⚙") || line.starts_with("🔧") || line.contains("Tool:")
+            {
+                Line::styled(line.as_str(), Style::default().fg(STATUS_RUNNING))
             } else {
-                Line::from(line.as_str())
-            }
-        })
-        .collect();
-
-    let state_str = match worker.state {
-        WorkerState::Starting => "Starting",
-        WorkerState::Running => "Streaming...",
-        WorkerState::WaitingForInput => "Waiting for input",
-        WorkerState::Complete => "Complete",
-        WorkerState::Error => "Error",
-    };
-
-    let scroll_info = if total_lines > output_height {
-        format!(
-            " [{}/{}] ",
-            scroll + output_height.min(total_lines),
-            total_lines
-        )
-    } else {
-        String::new()
-    };
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(format!(
-                    " Worker #{} - {} [{}]{}",
-                    worker.id,
-                    truncate_str(&worker.description, 20),
-                    state_str,
-                    scroll_info
-                ))
-                .title_style(Style::default().fg(Color::Cyan).bold())
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
-        .wrap(Wrap { trim: false });
-
-    f.render_widget(paragraph, area);
-}
-
-/// Renders the session messages when no worker is selected.
-fn render_session_messages(f: &mut Frame, session: &crate::tui::session::Session, area: Rect) {
-    let lines: Vec<Line> = session
-        .messages
-        .iter()
-        .map(|(msg, is_user)| {
-            if *is_user {
-                Line::styled(msg.as_str(), Style::default().fg(Color::Magenta).bold())
-            } else if msg.starts_with('📋') {
-                Line::styled(msg.as_str(), Style::default().fg(Color::Green))
-            } else if msg.starts_with('✗') {
-                Line::styled(msg.as_str(), Style::default().fg(Color::Red))
-            } else {
-                Line::styled(msg.as_str(), Style::default().fg(Color::Gray))
+                Line::styled(line.as_str(), Style::default().fg(TEXT_PRIMARY))
             }
         })
         .collect();
 
     let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(format!(" {} ", session.name))
-                .title_style(Style::default().fg(Color::Cyan).bold())
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
+        .scroll((scroll as u16, 0))
         .wrap(Wrap { trim: false });
 
-    f.render_widget(paragraph, area);
+    f.render_widget(paragraph, content_area);
+
+    // Scrollbar
+    if total_lines > visible_height {
+        let scrollbar_area = Rect {
+            x: content_area.x + content_area.width - 1,
+            y: content_area.y,
+            width: 1,
+            height: content_area.height,
+        };
+
+        let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
+        let scrollbar =
+            Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(BORDER));
+
+        f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
 }
 
-/// Renders the input field.
-pub fn render_input(f: &mut Frame, app: &App, area: Rect) {
-    let style = if app.input_mode {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
+/// Renders the sticky input box at the bottom.
+fn render_input_box(f: &mut Frame, app: &App, area: Rect) {
+    let is_active = app.input_mode;
 
-    let spans = if app.input_mode {
+    let border_color = if is_active { ACCENT } else { BORDER };
+    let bg_color = BG_PANEL;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .style(Style::default().bg(bg_color));
+
+    f.render_widget(block.clone(), area);
+
+    let inner = block.inner(area);
+
+    // Build input line with cursor
+    let spans = if is_active {
         let chars: Vec<char> = app.input.chars().collect();
         let before: String = chars[..app.cursor_pos].iter().collect();
         let cursor_char = chars.get(app.cursor_pos).copied().unwrap_or(' ');
@@ -319,93 +442,47 @@ pub fn render_input(f: &mut Frame, app: &App, area: Rect) {
         };
 
         vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(before),
+            Span::styled("› ", Style::default().fg(ACCENT)),
+            Span::styled(before, Style::default().fg(TEXT_PRIMARY)),
             Span::styled(
                 cursor_char.to_string(),
-                Style::default().fg(Color::Black).bg(Color::Yellow),
+                Style::default().fg(BG_PRIMARY).bg(ACCENT),
             ),
-            Span::raw(after),
+            Span::styled(after, Style::default().fg(TEXT_PRIMARY)),
         ]
+    } else if app.input.is_empty() {
+        vec![Span::styled(
+            "Press 'i' to enter a task...",
+            Style::default().fg(TEXT_DIM),
+        )]
     } else {
         vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(&app.input),
+            Span::styled("› ", Style::default().fg(TEXT_DIM)),
+            Span::styled(&app.input, Style::default().fg(TEXT_SECONDARY)),
         ]
     };
 
-    let title = if app.input_mode {
-        " Type your task (Enter to send, Esc to navigate) "
+    let input_line = Paragraph::new(Line::from(spans));
+    f.render_widget(input_line, inner);
+
+    // Status hint on right side
+    let hint = if is_active {
+        "Enter to send · Esc to cancel"
     } else {
-        " Press 'i' to type "
+        "i: input · l: logs · q: quit"
     };
 
-    let border_style = if app.input_mode {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let input = Paragraph::new(Line::from(spans)).style(style).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(title)
-            .title_style(border_style)
-            .border_style(border_style),
-    );
-
-    f.render_widget(input, area);
-}
-
-/// Renders the status bar at the bottom.
-pub fn render_status(f: &mut Frame, app: &App, area: Rect) {
-    let session = app.current_session();
-    let status_color = if app.confirm_delete || app.confirm_clear_all || app.confirm_delete_session
-    {
-        Color::Red
-    } else if app.status.contains("Error") {
-        Color::Red
-    } else if app.status.contains("Running") || app.status.contains("analyzing") {
-        Color::Yellow
-    } else {
-        Color::Green
-    };
-
-    let keys = if app.confirm_delete || app.confirm_clear_all || app.confirm_delete_session {
-        "y: Yes | n: No, cancel"
-    } else if app.input_mode {
-        "Enter: Send | Esc: Navigate"
-    } else if app.show_logs {
-        "l: Close logs | n/p: Session | q: Quit"
-    } else if session.selected_worker.is_some() {
-        "j/k: Scroll | Tab: Next worker | Esc: Back | g/G: Top/Bottom | q: Quit"
-    } else if !session.workers.is_empty() {
-        "j/k: Select worker | n/p: Session | l: Logs | q: Quit"
-    } else {
-        "n/p: Session | i: Input | l: Logs | q: Quit"
-    };
-
-    let border_color = if app.confirm_delete || app.confirm_clear_all || app.confirm_delete_session
-    {
-        Color::Red
-    } else {
-        Color::DarkGray
-    };
-
-    let status = Paragraph::new(Line::from(vec![
-        Span::styled(&app.status, Style::default().fg(status_color).bold()),
-        Span::raw("  │  "),
-        Span::styled(keys, Style::default().fg(Color::DarkGray)),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border_color)),
-    );
-
-    f.render_widget(status, area);
+    let hint_width = hint.len() as u16;
+    if inner.width > hint_width + 10 {
+        let hint_area = Rect {
+            x: inner.x + inner.width - hint_width - 1,
+            y: inner.y,
+            width: hint_width,
+            height: 1,
+        };
+        let hint_para = Paragraph::new(Span::styled(hint, Style::default().fg(TEXT_DIM)));
+        f.render_widget(hint_para, hint_area);
+    }
 }
 
 #[cfg(test)]
@@ -414,8 +491,6 @@ mod tests {
 
     #[test]
     fn render_functions_exist() {
-        // Smoke test to ensure all render functions are defined
-        // Actual rendering tests would require a mock terminal
         assert!(true);
     }
 }

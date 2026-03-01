@@ -2,6 +2,7 @@
 
 pub mod dialogs;
 pub mod render;
+pub mod theme;
 
 pub use dialogs::*;
 pub use render::*;

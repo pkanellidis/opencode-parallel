@@ -2,14 +2,16 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Color, Style, Stylize},
+    style::Style,
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
 use crate::tui::app::App;
 use crate::utils::truncate_str;
+
+use super::theme::*;
 
 /// Renders the model selector popup.
 pub fn render_model_selector(f: &mut Frame, app: &App) {
@@ -19,7 +21,7 @@ pub fn render_model_selector(f: &mut Frame, app: &App) {
 
     let area = f.area();
     let popup_width = 60u16.min(area.width.saturating_sub(4));
-    let popup_height = (app.model_options.len() + 2).min(20) as u16;
+    let popup_height = (app.model_options.len() + 4).min(20) as u16;
 
     let popup_area = Rect {
         x: (area.width.saturating_sub(popup_width)) / 2,
@@ -33,23 +35,29 @@ pub fn render_model_selector(f: &mut Frame, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, opt)| {
-            let style = if i == app.model_selector_index {
-                Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+            let is_selected = i == app.model_selector_index;
+            let bg = if is_selected { BG_SELECTED } else { BG_PANEL };
+            let fg = if is_selected {
+                TEXT_PRIMARY
             } else {
-                Style::default().fg(Color::White)
+                TEXT_SECONDARY
             };
-            ListItem::new(Line::styled(opt.display(), style))
+
+            ListItem::new(Line::styled(
+                format!(" {} ", opt.display()),
+                Style::default().fg(fg),
+            ))
+            .style(Style::default().bg(bg))
         })
         .collect();
 
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" Select Model (↑↓/jk Enter Esc) ")
-            .title_style(Style::default().fg(Color::Cyan).bold())
-            .border_style(Style::default().fg(Color::Cyan))
-            .style(Style::default().bg(Color::Black)),
+            .title(" Select Model ")
+            .title_style(Style::default().fg(ACCENT))
+            .border_style(Style::default().fg(BORDER_ACTIVE))
+            .style(Style::default().bg(BG_PANEL)),
     );
 
     f.render_widget(Clear, popup_area);
@@ -65,7 +73,7 @@ pub fn render_permission_dialog(f: &mut Frame, app: &App) {
     let perm = &app.pending_permissions[0];
     let area = f.area();
     let popup_width = 70u16.min(area.width.saturating_sub(4));
-    let popup_height = 12u16.min(area.height.saturating_sub(4));
+    let popup_height = 14u16.min(area.height.saturating_sub(4));
 
     let popup_area = Rect {
         x: (area.width.saturating_sub(popup_width)) / 2,
@@ -82,72 +90,97 @@ pub fn render_permission_dialog(f: &mut Frame, app: &App) {
     let desc_str = perm
         .worker_description
         .as_ref()
-        .map(|d| format!(" ({})", d))
+        .map(|d| format!(" ({})", truncate_str(d, 30)))
         .unwrap_or_default();
 
-    let patterns_display: Vec<String> = perm.patterns.iter().map(|p| truncate_str(p, 60)).collect();
+    let patterns_display: Vec<String> = perm
+        .patterns
+        .iter()
+        .take(3)
+        .map(|p| truncate_str(p, 55))
+        .collect();
 
     let mut lines = vec![
+        Line::from(""),
         Line::from(vec![Span::styled(
-            "Permission Request",
-            Style::default().fg(Color::Yellow).bold(),
+            "  Permission Required",
+            Style::default().fg(WARNING),
         )]),
         Line::from(""),
         Line::from(vec![
-            Span::raw("From: "),
+            Span::styled("  From: ", Style::default().fg(TEXT_DIM)),
             Span::styled(
                 format!("{}{}", worker_str, desc_str),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(TEXT_PRIMARY),
             ),
         ]),
         Line::from(vec![
-            Span::raw("Tool: "),
-            Span::styled(&perm.permission, Style::default().fg(Color::Green).bold()),
+            Span::styled("  Tool: ", Style::default().fg(TEXT_DIM)),
+            Span::styled(&perm.permission, Style::default().fg(ACCENT)),
         ]),
         Line::from(""),
-        Line::from(vec![Span::raw("Files: ")]),
     ];
 
-    for pattern in &patterns_display {
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(pattern, Style::default().fg(Color::White)),
-        ]));
+    if !patterns_display.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "  Files:",
+            Style::default().fg(TEXT_DIM),
+        )]));
+        for pattern in &patterns_display {
+            lines.push(Line::from(vec![Span::styled(
+                format!("    {}", pattern),
+                Style::default().fg(TEXT_SECONDARY),
+            )]));
+        }
+        if perm.patterns.len() > 3 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("    ... and {} more", perm.patterns.len() - 3),
+                Style::default().fg(TEXT_DIM),
+            )]));
+        }
     }
 
     lines.push(Line::from(""));
 
     let options = [
-        ("y", "Yes (once)", app.permission_selector_index == 0),
+        ("y", "Yes", app.permission_selector_index == 0),
         ("a", "Always", app.permission_selector_index == 1),
-        ("n", "No (reject)", app.permission_selector_index == 2),
+        ("n", "Reject", app.permission_selector_index == 2),
     ];
 
     let option_spans: Vec<Span> = options
         .iter()
         .enumerate()
         .flat_map(|(i, (key, label, selected))| {
-            let style = if *selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+            let (fg, bg) = if *selected {
+                (BG_PRIMARY, ACCENT)
             } else {
-                Style::default().fg(Color::Gray)
+                (TEXT_SECONDARY, BG_PANEL)
             };
-            let sep = if i < options.len() - 1 { "  " } else { "" };
+            let sep = if i < options.len() - 1 { "   " } else { "" };
             vec![
-                Span::styled(format!("[{}] {}", key, label), style),
+                Span::styled(
+                    format!(" {} {} ", key, label),
+                    Style::default().fg(fg).bg(bg),
+                ),
                 Span::raw(sep),
             ]
         })
         .collect();
 
-    lines.push(Line::from(option_spans));
+    lines.push(Line::from(
+        vec![Span::raw("  ")]
+            .into_iter()
+            .chain(option_spans)
+            .collect::<Vec<_>>(),
+    ));
 
     let pending_count = app.pending_permissions.len();
     if pending_count > 1 {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
-            format!("({} more pending)", pending_count - 1),
-            Style::default().fg(Color::DarkGray),
+            format!("  {} more pending", pending_count - 1),
+            Style::default().fg(TEXT_DIM),
         )]));
     }
 
@@ -155,11 +188,8 @@ pub fn render_permission_dialog(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Double)
-                .title(" 🔐 Permission Required ")
-                .title_style(Style::default().fg(Color::Yellow).bold())
-                .border_style(Style::default().fg(Color::Yellow))
-                .style(Style::default().bg(Color::Black)),
+                .border_style(Style::default().fg(WARNING))
+                .style(Style::default().bg(BG_PANEL)),
         )
         .wrap(Wrap { trim: false });
 
@@ -178,8 +208,8 @@ pub fn render_autocomplete(f: &mut Frame, app: &App, input_area: Rect) {
         return;
     }
 
-    let popup_height = (suggestions.len() + 2).min(8) as u16;
-    let popup_width = 45u16;
+    let popup_height = (suggestions.len() + 2).min(10) as u16;
+    let popup_width = 50u16;
 
     let popup_area = Rect {
         x: input_area.x + 2,
@@ -192,22 +222,28 @@ pub fn render_autocomplete(f: &mut Frame, app: &App, input_area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let style = if i == app.autocomplete_index {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let text = format!("{:<15} {}", s.command, s.description);
-            ListItem::new(Line::styled(text, style))
+            let is_selected = i == app.autocomplete_index;
+            let bg = if is_selected { BG_SELECTED } else { BG_PANEL };
+            let cmd_color = if is_selected { ACCENT } else { TEXT_PRIMARY };
+            let desc_color = TEXT_DIM;
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {:<12}", s.command),
+                    Style::default().fg(cmd_color),
+                ),
+                Span::styled(s.description, Style::default().fg(desc_color)),
+            ]);
+
+            ListItem::new(line).style(Style::default().bg(bg))
         })
         .collect();
 
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" Commands ")
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(BORDER))
+            .style(Style::default().bg(BG_PANEL)),
     );
 
     f.render_widget(Clear, popup_area);
