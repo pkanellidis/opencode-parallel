@@ -256,42 +256,99 @@ fn render_main_content(f: &mut Frame, app: &App, area: Rect) {
     render_messages(f, app, inner_area);
 }
 
-/// Renders the message history.
+/// Renders the message history with distinct styling for user vs response messages.
 fn render_messages(f: &mut Frame, app: &App, area: Rect) {
     let session = app.current_session();
 
-    let lines: Vec<Line> = session
-        .messages
-        .iter()
-        .map(|(msg, is_user)| {
-            if *is_user {
+    // Build lines with background info
+    let mut styled_lines: Vec<(Line, bool)> = Vec::new(); // (line, is_user)
+
+    for (msg, is_user) in &session.messages {
+        if *is_user {
+            // User messages: accent prompt, primary text
+            styled_lines.push((
                 Line::from(vec![
                     Span::styled("› ", Style::default().fg(ACCENT)),
                     Span::styled(msg.as_str(), Style::default().fg(TEXT_PRIMARY)),
-                ])
-            } else if msg.starts_with("Plan:") || msg.starts_with("Spawning") {
-                Line::styled(msg.as_str(), Style::default().fg(ACCENT_SECONDARY))
-            } else if msg.starts_with("Error") || msg.starts_with("✗") {
-                Line::styled(msg.as_str(), Style::default().fg(ERROR))
-            } else if msg.starts_with("---") || msg.starts_with("Worker #") {
-                Line::styled(msg.as_str(), Style::default().fg(SUCCESS))
-            } else {
-                Line::styled(msg.as_str(), Style::default().fg(TEXT_SECONDARY))
-            }
-        })
-        .collect();
+                ]),
+                true,
+            ));
+        } else if msg.is_empty() {
+            // Empty lines (spacers)
+            styled_lines.push((Line::from(""), false));
+        } else if msg.starts_with("Plan:") || msg.starts_with("Spawning") {
+            styled_lines.push((
+                Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(msg.as_str(), Style::default().fg(ACCENT_SECONDARY)),
+                ]),
+                false,
+            ));
+        } else if msg.starts_with("Error") || msg.starts_with("✗") {
+            styled_lines.push((
+                Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(msg.as_str(), Style::default().fg(ERROR)),
+                ]),
+                false,
+            ));
+        } else if msg.starts_with("---") || msg.starts_with("Worker #") {
+            styled_lines.push((
+                Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(msg.as_str(), Style::default().fg(SUCCESS)),
+                ]),
+                false,
+            ));
+        } else {
+            // Regular response text
+            styled_lines.push((
+                Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(msg.as_str(), Style::default().fg(TEXT_SECONDARY)),
+                ]),
+                false,
+            ));
+        }
+    }
 
-    let total_lines = lines.len();
+    let total_lines = styled_lines.len();
     let visible_height = area.height as usize;
     let scroll = session
         .scroll_offset
         .min(total_lines.saturating_sub(visible_height));
 
-    let paragraph = Paragraph::new(lines)
-        .scroll((scroll as u16, 0))
-        .wrap(Wrap { trim: false });
+    // Render each line with appropriate background
+    let visible_lines: Vec<&(Line, bool)> = styled_lines
+        .iter()
+        .skip(scroll)
+        .take(visible_height)
+        .collect();
 
-    f.render_widget(paragraph, area);
+    for (i, (line, is_user)) in visible_lines.iter().enumerate() {
+        let y = area.y + i as u16;
+        if y >= area.y + area.height {
+            break;
+        }
+
+        let line_area = Rect {
+            x: area.x,
+            y,
+            width: area.width.saturating_sub(1), // Leave room for scrollbar
+            height: 1,
+        };
+
+        // Response messages get the panel background, user messages stay on primary bg
+        let bg = if *is_user { BG_PRIMARY } else { BG_PANEL };
+
+        // Clear line with background
+        let bg_block = Block::default().style(Style::default().bg(bg));
+        f.render_widget(bg_block, line_area);
+
+        // Render the line
+        let para = Paragraph::new((*line).clone());
+        f.render_widget(para, line_area);
+    }
 
     // Scrollbar if needed
     if total_lines > visible_height {
