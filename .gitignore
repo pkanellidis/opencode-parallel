@@ -18,3 +18,4 @@ Thumbs.db
 # Config
 *.local.json
 .env
+/config.json
