@@ -5,6 +5,7 @@ use crate::server::OpenCodeServer;
 
 use super::commands::{get_suggestions, CommandSuggestion};
 use super::messages::{ModelOption, PendingPermission};
+use super::selection::TextSelection;
 use super::session::Session;
 
 /// Main application state.
@@ -59,6 +60,12 @@ pub struct App {
     pub show_permission_dialog: bool,
     /// Selected permission option index.
     pub permission_selector_index: usize,
+    /// Scroll position in main content area.
+    pub main_scroll: usize,
+    /// Current text selection (for copy).
+    pub selection: Option<TextSelection>,
+    /// Content lines for the main view (used for selection/copy).
+    pub content_lines: Vec<String>,
 }
 
 impl App {
@@ -91,7 +98,80 @@ impl App {
             pending_permissions: Vec::new(),
             show_permission_dialog: false,
             permission_selector_index: 0,
+            main_scroll: 0,
+            selection: None,
+            content_lines: Vec::new(),
         }
+    }
+
+    /// Clears the current text selection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// Starts a new text selection at the given position.
+    pub fn start_selection(&mut self, col: u16, row: u16) {
+        self.selection = Some(TextSelection::new(col, row));
+    }
+
+    /// Updates the current selection end position.
+    pub fn update_selection(&mut self, col: u16, row: u16) {
+        if let Some(ref mut sel) = self.selection {
+            sel.update(col, row);
+        }
+    }
+
+    /// Finishes the current selection.
+    pub fn finish_selection(&mut self) {
+        if let Some(ref mut sel) = self.selection {
+            sel.finish();
+            if sel.is_empty() {
+                self.selection = None;
+            }
+        }
+    }
+
+    /// Gets the selected text from content_lines.
+    pub fn get_selected_text(&self) -> Option<String> {
+        let sel = self.selection.as_ref()?;
+        if sel.is_empty() {
+            return None;
+        }
+
+        let (start, end) = sel.normalized();
+        let mut lines = Vec::new();
+
+        for row in start.row..=end.row {
+            if let Some(line) = self.content_lines.get(row as usize) {
+                let line_len = line.len() as u16;
+                let col_start = if row == start.row { start.col } else { 0 };
+                let col_end = if row == end.row {
+                    end.col.min(line_len)
+                } else {
+                    line_len
+                };
+
+                if col_start < col_end && (col_start as usize) < line.len() {
+                    let end_idx = (col_end as usize).min(line.len());
+                    lines.push(line[col_start as usize..end_idx].to_string());
+                }
+            }
+        }
+
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        }
+    }
+
+    /// Copies selected text to clipboard.
+    pub fn copy_selection(&mut self) -> Option<String> {
+        let text = self.get_selected_text();
+        if text.is_some() {
+            self.clear_selection();
+        }
+        text
     }
 
     /// Returns a reference to the current session.

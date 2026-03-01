@@ -38,6 +38,7 @@ impl WorkerState {
 }
 
 /// A parallel worker executing a task.
+#[derive(Clone)]
 pub struct Worker {
     /// Unique worker ID within the session.
     pub id: u32,

@@ -5,6 +5,7 @@
 pub mod app;
 pub mod commands;
 pub mod messages;
+pub mod selection;
 pub mod session;
 pub mod ui;
 pub mod worker;
@@ -14,13 +15,14 @@ mod handlers;
 pub use app::App;
 pub use commands::SlashCommand;
 pub use messages::{AppMessage, ModelOption, PendingPermission};
+pub use selection::TextSelection;
 pub use session::Session;
 pub use ui::render::ui;
 pub use worker::{Worker, WorkerState};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -58,10 +60,11 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     let mut app = App::new(server.clone());
 
     app.status = "Initializing orchestrator...".to_string();
-    terminal.draw(|f| ui(f, &app))?;
+    terminal.draw(|f| ui(f, &mut app))?;
 
     app.orchestrator.init().await?;
     app.status = "Ready - Type your task".to_string();
+    terminal.draw(|f| ui(f, &mut app))?;
 
     let (tx, mut rx) = mpsc::channel::<AppMessage>(100);
 
@@ -78,22 +81,12 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     });
 
     loop {
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| ui(f, &mut app))?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
             match event::read()? {
                 Event::Mouse(mouse) => {
-                    if app.show_logs {
-                        match mouse.kind {
-                            MouseEventKind::ScrollDown => {
-                                app.logs_scroll = app.logs_scroll.saturating_add(3);
-                            }
-                            MouseEventKind::ScrollUp => {
-                                app.logs_scroll = app.logs_scroll.saturating_sub(3);
-                            }
-                            _ => {}
-                        }
-                    }
+                    handlers::handle_mouse_event(&mut app, mouse);
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     handlers::handle_key_event(&mut app, key, &server, &tx).await;

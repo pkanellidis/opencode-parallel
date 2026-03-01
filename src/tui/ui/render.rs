@@ -6,7 +6,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        Wrap,
     },
     Frame,
 };
@@ -19,7 +18,8 @@ use super::dialogs::{render_autocomplete, render_model_selector, render_permissi
 use super::theme::*;
 
 /// Main UI rendering entry point.
-pub fn ui(f: &mut Frame, app: &App) {
+pub fn ui(f: &mut Frame, app: &mut App) {
+    app.content_lines.clear();
     // Fill entire screen with black background
     let bg_block = Block::default().style(Style::default().bg(BG_PRIMARY));
     f.render_widget(bg_block, f.area());
@@ -63,7 +63,7 @@ pub fn ui(f: &mut Frame, app: &App) {
 }
 
 /// Renders the landing view when no workers are active.
-fn render_landing(f: &mut Frame, app: &App, area: Rect) {
+fn render_landing(f: &mut Frame, app: &mut App, area: Rect) {
     // Center the content vertically
     let vertical_center = Layout::default()
         .direction(Direction::Vertical)
@@ -139,9 +139,8 @@ fn render_workers_sidebar(f: &mut Frame, app: &App, area: Rect) {
         height: area.height.saturating_sub(1),
     };
 
-    // Panel background
+    // Sidebar border only (pitch black bg)
     let panel = Block::default()
-        .style(Style::default().bg(BG_PANEL))
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(BORDER));
     f.render_widget(panel, area);
@@ -207,7 +206,7 @@ fn render_workers_sidebar(f: &mut Frame, app: &App, area: Rect) {
             };
 
             let is_selected = Some(i) == session.selected_worker;
-            let bg = if is_selected { BG_SELECTED } else { BG_PANEL };
+            let bg = if is_selected { BG_SELECTED } else { BG_PRIMARY };
             let text_color = if is_selected {
                 TEXT_PRIMARY
             } else {
@@ -232,13 +231,7 @@ fn render_workers_sidebar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Renders the main content area (messages or worker output).
-fn render_main_content(f: &mut Frame, app: &App, area: Rect) {
-    let session = app.current_session();
-
-    // Panel background
-    let panel = Block::default().style(Style::default().bg(BG_PANEL));
-    f.render_widget(panel, area);
-
+fn render_main_content(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_area = Rect {
         x: area.x + 2,
         y: area.y + 1,
@@ -246,9 +239,11 @@ fn render_main_content(f: &mut Frame, app: &App, area: Rect) {
         height: area.height.saturating_sub(2),
     };
 
-    if let Some(idx) = session.selected_worker {
-        if let Some(worker) = session.workers.get(idx) {
-            render_worker_output(f, app, worker, inner_area);
+    let selected_worker_idx = app.current_session().selected_worker;
+    if let Some(idx) = selected_worker_idx {
+        let worker = app.current_session().workers.get(idx).cloned();
+        if let Some(worker) = worker {
+            render_worker_output(f, app, &worker, inner_area);
             return;
         }
     }
@@ -257,75 +252,99 @@ fn render_main_content(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Renders the message history with distinct styling for user vs response messages.
-fn render_messages(f: &mut Frame, app: &App, area: Rect) {
-    let session = app.current_session();
+fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
+    // Clone messages to avoid borrow conflicts
+    let messages: Vec<(String, bool)> = app.current_session().messages.clone();
+    let scroll_offset = app.current_session().scroll_offset;
 
-    // Build lines with background info
-    let mut styled_lines: Vec<(Line, bool)> = Vec::new(); // (line, is_user)
+    // Build lines with background info and plain text for selection
+    let mut styled_lines: Vec<(Line, bool, String)> = Vec::new(); // (line, is_user, plain_text)
 
-    for (msg, is_user) in &session.messages {
+    for (msg, is_user) in &messages {
         if *is_user {
-            // User messages: accent prompt, primary text
+            let plain = format!("› {}", msg);
             styled_lines.push((
                 Line::from(vec![
                     Span::styled("› ", Style::default().fg(ACCENT)),
                     Span::styled(msg.as_str(), Style::default().fg(TEXT_PRIMARY)),
                 ]),
                 true,
+                plain,
             ));
         } else if msg.is_empty() {
-            // Empty lines (spacers)
-            styled_lines.push((Line::from(""), false));
+            styled_lines.push((Line::from(""), false, String::new()));
         } else if msg.starts_with("Plan:") || msg.starts_with("Spawning") {
+            let plain = format!("  {}", msg);
             styled_lines.push((
                 Line::from(vec![
                     Span::styled("  ", Style::default()),
                     Span::styled(msg.as_str(), Style::default().fg(ACCENT_SECONDARY)),
                 ]),
                 false,
+                plain,
             ));
         } else if msg.starts_with("Error") || msg.starts_with("✗") {
+            let plain = format!("  {}", msg);
             styled_lines.push((
                 Line::from(vec![
                     Span::styled("  ", Style::default()),
                     Span::styled(msg.as_str(), Style::default().fg(ERROR)),
                 ]),
                 false,
+                plain,
             ));
         } else if msg.starts_with("---") || msg.starts_with("Worker #") {
+            let plain = format!("  {}", msg);
             styled_lines.push((
                 Line::from(vec![
                     Span::styled("  ", Style::default()),
                     Span::styled(msg.as_str(), Style::default().fg(SUCCESS)),
                 ]),
                 false,
+                plain,
             ));
         } else {
-            // Regular response text
+            let plain = format!("  {}", msg);
             styled_lines.push((
                 Line::from(vec![
                     Span::styled("  ", Style::default()),
                     Span::styled(msg.as_str(), Style::default().fg(TEXT_SECONDARY)),
                 ]),
                 false,
+                plain,
             ));
         }
     }
 
     let total_lines = styled_lines.len();
     let visible_height = area.height as usize;
-    let scroll = session
-        .scroll_offset
-        .min(total_lines.saturating_sub(visible_height));
+    let scroll = scroll_offset.min(total_lines.saturating_sub(visible_height));
+
+    // Populate content_lines for selection (screen row -> plain text)
+    let screen_height = f.area().height;
+    for row in 0..screen_height {
+        if row < area.y || row >= area.y + area.height {
+            app.content_lines.push(String::new());
+        } else {
+            let line_idx = scroll + (row - area.y) as usize;
+            if let Some((_, _, plain)) = styled_lines.get(line_idx) {
+                app.content_lines.push(plain.clone());
+            } else {
+                app.content_lines.push(String::new());
+            }
+        }
+    }
 
     // Render each line with appropriate background
-    let visible_lines: Vec<&(Line, bool)> = styled_lines
-        .iter()
+    let visible_lines: Vec<(Line, bool, String)> = styled_lines
+        .into_iter()
         .skip(scroll)
         .take(visible_height)
         .collect();
 
-    for (i, (line, is_user)) in visible_lines.iter().enumerate() {
+    let selection = app.selection.clone();
+
+    for (i, (line, is_user, plain)) in visible_lines.iter().enumerate() {
         let y = area.y + i as u16;
         if y >= area.y + area.height {
             break;
@@ -334,19 +353,28 @@ fn render_messages(f: &mut Frame, app: &App, area: Rect) {
         let line_area = Rect {
             x: area.x,
             y,
-            width: area.width.saturating_sub(1), // Leave room for scrollbar
+            width: area.width.saturating_sub(1),
             height: 1,
         };
 
-        // Response messages get the panel background, user messages stay on primary bg
         let bg = if *is_user { BG_PRIMARY } else { BG_PANEL };
-
-        // Clear line with background
         let bg_block = Block::default().style(Style::default().bg(bg));
         f.render_widget(bg_block, line_area);
 
-        // Render the line
-        let para = Paragraph::new((*line).clone());
+        // Check if this row has selection
+        if let Some(ref sel) = selection {
+            if let Some((col_start, col_end)) = sel.row_range(y, area.x + plain.len() as u16) {
+                // Convert screen coordinates to content-relative coordinates
+                let rel_start = col_start.saturating_sub(area.x);
+                let rel_end = col_end.saturating_sub(area.x);
+                if rel_end > rel_start {
+                    render_line_with_selection(f, line, line_area, rel_start, rel_end);
+                    continue;
+                }
+            }
+        }
+
+        let para = Paragraph::new(line.clone());
         f.render_widget(para, line_area);
     }
 
@@ -369,9 +397,37 @@ fn render_messages(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// Renders a line with selection highlighting.
+fn render_line_with_selection(
+    f: &mut Frame,
+    line: &Line,
+    area: Rect,
+    sel_start: u16,
+    sel_end: u16,
+) {
+    let sel_area = Rect {
+        x: area.x + sel_start,
+        y: area.y,
+        width: sel_end
+            .saturating_sub(sel_start)
+            .min(area.width.saturating_sub(sel_start)),
+        height: 1,
+    };
+    let sel_block = Block::default().style(Style::default().bg(SELECTION_BG));
+    f.render_widget(sel_block, sel_area);
+
+    let para = Paragraph::new(line.clone());
+    f.render_widget(para, area);
+}
+
 /// Renders a worker's output.
-fn render_worker_output(f: &mut Frame, app: &App, worker: &crate::tui::worker::Worker, area: Rect) {
-    let session = app.current_session();
+fn render_worker_output(
+    f: &mut Frame,
+    app: &mut App,
+    worker: &crate::tui::worker::Worker,
+    area: Rect,
+) {
+    let scroll_offset = app.current_session().scroll_offset;
 
     // Header with worker info
     let (status_text, status_color) = match worker.state {
@@ -382,6 +438,10 @@ fn render_worker_output(f: &mut Frame, app: &App, worker: &crate::tui::worker::W
         WorkerState::Error => ("Error", ERROR),
     };
 
+    let header_text = format!(
+        "Worker #{} · {} · {}",
+        worker.id, worker.description, status_text
+    );
     let header = Line::from(vec![
         Span::styled(
             format!("Worker #{}", worker.id),
@@ -403,7 +463,8 @@ fn render_worker_output(f: &mut Frame, app: &App, worker: &crate::tui::worker::W
     f.render_widget(header_para, header_area);
 
     // Separator
-    let sep = Line::styled("─".repeat(area.width as usize), Style::default().fg(BORDER));
+    let sep_text = "─".repeat(area.width as usize);
+    let sep = Line::styled(&sep_text, Style::default().fg(BORDER));
     let sep_area = Rect {
         x: area.x,
         y: area.y + 1,
@@ -429,30 +490,83 @@ fn render_worker_output(f: &mut Frame, app: &App, worker: &crate::tui::worker::W
     let scroll = if auto_scroll {
         max_scroll
     } else {
-        session.scroll_offset.min(max_scroll)
+        scroll_offset.min(max_scroll)
     };
 
-    let lines: Vec<Line> = display_lines
-        .iter()
-        .map(|line| {
-            if line.starts_with('✓') || line.starts_with("Complete") {
-                Line::styled(line.as_str(), Style::default().fg(SUCCESS))
-            } else if line.starts_with('✗') || line.starts_with("Error") {
-                Line::styled(line.as_str(), Style::default().fg(ERROR))
-            } else if line.starts_with("⚙") || line.starts_with("🔧") || line.contains("Tool:")
-            {
-                Line::styled(line.as_str(), Style::default().fg(STATUS_RUNNING))
+    // Populate content_lines for selection
+    for row in 0..f.area().height {
+        if row < content_area.y || row >= content_area.y + content_area.height {
+            if row == area.y {
+                app.content_lines.push(header_text.clone());
+            } else if row == area.y + 1 {
+                app.content_lines.push(sep_text.clone());
             } else {
-                Line::styled(line.as_str(), Style::default().fg(TEXT_PRIMARY))
+                app.content_lines.push(String::new());
             }
-        })
-        .collect();
+        } else {
+            let line_idx = scroll + (row - content_area.y) as usize;
+            if let Some(line) = display_lines.get(line_idx) {
+                app.content_lines.push(line.clone());
+            } else {
+                app.content_lines.push(String::new());
+            }
+        }
+    }
 
-    let paragraph = Paragraph::new(lines)
-        .scroll((scroll as u16, 0))
-        .wrap(Wrap { trim: false });
+    // Render lines with potential selection highlighting
+    for (i, line_idx) in (scroll..scroll + visible_height).enumerate() {
+        let y = content_area.y + i as u16;
+        if y >= content_area.y + content_area.height {
+            break;
+        }
 
-    f.render_widget(paragraph, content_area);
+        if let Some(line_text) = display_lines.get(line_idx) {
+            let line_area = Rect {
+                x: content_area.x,
+                y,
+                width: content_area.width.saturating_sub(1),
+                height: 1,
+            };
+
+            let fg = if line_text.starts_with('✓') || line_text.starts_with("Complete") {
+                SUCCESS
+            } else if line_text.starts_with('✗') || line_text.starts_with("Error") {
+                ERROR
+            } else if line_text.starts_with("⚙")
+                || line_text.starts_with("🔧")
+                || line_text.contains("Tool:")
+            {
+                STATUS_RUNNING
+            } else {
+                TEXT_PRIMARY
+            };
+
+            // Check for selection
+            if let Some(ref sel) = app.selection {
+                let line_end = content_area.x + line_text.len() as u16;
+                if let Some((col_start, col_end)) = sel.row_range(y, line_end) {
+                    // Convert screen coordinates to content-relative coordinates
+                    let rel_start = col_start.saturating_sub(content_area.x);
+                    let rel_end = col_end.saturating_sub(content_area.x);
+                    if rel_end > rel_start {
+                        let sel_area = Rect {
+                            x: content_area.x + rel_start,
+                            y,
+                            width: (rel_end - rel_start)
+                                .min(line_area.width.saturating_sub(rel_start)),
+                            height: 1,
+                        };
+                        let sel_block = Block::default().style(Style::default().bg(SELECTION_BG));
+                        f.render_widget(sel_block, sel_area);
+                    }
+                }
+            }
+
+            let line = Line::styled(line_text.as_str(), Style::default().fg(fg));
+            let para = Paragraph::new(line);
+            f.render_widget(para, line_area);
+        }
+    }
 
     // Scrollbar
     if total_lines > visible_height {
@@ -544,8 +658,6 @@ fn render_input_box(f: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn render_functions_exist() {
         assert!(true);

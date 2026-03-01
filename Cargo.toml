@@ -31,6 +31,7 @@ reqwest-eventsource = "0.6"
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.11", features = ["v4", "serde"] }
+arboard = "3"
 
 [profile.release]
 strip = true

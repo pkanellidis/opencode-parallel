@@ -46,3 +46,6 @@ pub const STATUS_RUNNING: Color = Color::Rgb(100, 180, 255);
 
 /// Waiting indicator color
 pub const STATUS_WAITING: Color = Color::Rgb(255, 200, 100);
+
+/// Selection highlight background color
+pub const SELECTION_BG: Color = Color::Rgb(60, 80, 120);

@@ -1,6 +1,6 @@
 //! Event handlers for the TUI.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc::Sender;
 
 use crate::orchestrator::Orchestrator;
@@ -12,12 +12,55 @@ use super::commands::{parse_slash_command, SlashCommand};
 use super::messages::{AppMessage, ModelOption, PendingPermission};
 use super::worker::{Worker, WorkerState};
 
+/// Handle mouse events for scrolling and text selection.
+pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            if app.show_logs {
+                app.logs_scroll = app.logs_scroll.saturating_add(3);
+            } else {
+                app.main_scroll = app.main_scroll.saturating_add(3);
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            if app.show_logs {
+                app.logs_scroll = app.logs_scroll.saturating_sub(3);
+            } else {
+                app.main_scroll = app.main_scroll.saturating_sub(3);
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            app.start_selection(mouse.column, mouse.row);
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            app.update_selection(mouse.column, mouse.row);
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            app.finish_selection();
+        }
+        _ => {}
+    }
+}
+
 pub async fn handle_key_event(
     app: &mut App,
     key: KeyEvent,
     server: &OpenCodeServer,
     tx: &Sender<AppMessage>,
 ) {
+    if key.code == KeyCode::Char('c')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && app.selection.is_some()
+    {
+        if let Some(text) = app.copy_selection() {
+            if let Ok(mut ctx) = arboard::Clipboard::new() {
+                let _ = ctx.set_text(&text);
+                app.status = format!("Copied {} chars", text.len());
+            }
+        }
+        return;
+    }
+
     if app.input_mode {
         handle_input_mode(app, key, server, tx).await;
     } else if app.show_permission_dialog && !app.pending_permissions.is_empty() {
@@ -270,7 +313,7 @@ async fn handle_submit_input(
                                 .send(AppMessage::WorkerOutput(
                                     session_id,
                                     task_id,
-                                    format!("Creating session..."),
+                                    "Creating session...".to_string(),
                                 ))
                                 .await;
 
@@ -448,7 +491,7 @@ async fn handle_slash_command(
                             if resp.connected.contains(&provider.id) {
                                 let provider_name =
                                     provider.name.as_ref().unwrap_or(&provider.id).clone();
-                                for (_key, model) in &provider.models {
+                                for model in provider.models.values() {
                                     let model_name =
                                         model.name.as_ref().unwrap_or(&model.id).clone();
                                     options.push(ModelOption {
