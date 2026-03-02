@@ -409,6 +409,7 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     let scroll = app.main_scroll();
 
     // Populate content_lines for selection (screen row -> plain text)
+    app.content_area_x = area.x;
     let screen_height = f.area().height;
     for row in 0..screen_height {
         if row < area.y || row >= area.y + area.height {
@@ -582,6 +583,7 @@ fn render_worker_output(
     };
 
     // Populate content_lines for selection
+    app.content_area_x = content_area.x;
     for row in 0..f.area().height {
         if row < content_area.y || row >= content_area.y + content_area.height {
             if row == area.y {
@@ -692,6 +694,7 @@ fn render_logs_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let scroll = app.logs_scroll();
 
     app.content_lines.clear();
+    app.content_area_x = inner.x;
     for row in 0..f.area().height {
         if row < inner.y || row >= inner.y + inner.height {
             app.content_lines.push(String::new());
