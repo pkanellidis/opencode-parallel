@@ -63,7 +63,6 @@ pub enum AppMessage {
     /// Worker produced output.
     WorkerOutput(usize, u32, String),
     /// Worker completed successfully.
-    #[allow(dead_code)]
     WorkerComplete(usize, u32),
     /// Worker encountered an error.
     WorkerError(usize, u32, String),

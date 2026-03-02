@@ -3,6 +3,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc::Sender;
 
+use crate::constants::{LINE_SCROLL_AMOUNT, PAGE_SCROLL_LINES};
 use crate::orchestrator::Orchestrator;
 use crate::server::{OpenCodeServer, StreamEvent};
 use crate::utils::{extract_question_text, format_tool_display};
@@ -10,37 +11,78 @@ use crate::utils::{extract_question_text, format_tool_display};
 use super::app::App;
 use super::commands::{parse_slash_command, SlashCommand};
 use super::messages::{AppMessage, ModelOption, PendingPermission};
+use super::scroll::ScrollDirection;
 use super::textarea::TextAreaAction;
 use super::worker::{Worker, WorkerState};
 
 /// Handle mouse events for scrolling and text selection.
-pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
+/// Returns true if a copy operation was performed.
+pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> bool {
     match mouse.kind {
         MouseEventKind::ScrollDown => {
-            if app.show_logs {
-                app.logs_scroll = app.logs_scroll.saturating_add(3);
-            } else {
-                app.main_scroll = app.main_scroll.saturating_add(3);
-            }
+            app.handle_scroll(ScrollDirection::Down);
+            false
         }
         MouseEventKind::ScrollUp => {
-            if app.show_logs {
-                app.logs_scroll = app.logs_scroll.saturating_sub(3);
-            } else {
-                app.main_scroll = app.main_scroll.saturating_sub(3);
-            }
+            app.handle_scroll(ScrollDirection::Up);
+            false
+        }
+        MouseEventKind::ScrollLeft => {
+            app.handle_scroll(ScrollDirection::Left);
+            false
+        }
+        MouseEventKind::ScrollRight => {
+            app.handle_scroll(ScrollDirection::Right);
+            false
         }
         MouseEventKind::Down(MouseButton::Left) => {
             app.start_selection(mouse.column, mouse.row);
+            false
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             app.update_selection(mouse.column, mouse.row);
+            false
         }
         MouseEventKind::Up(MouseButton::Left) => {
             app.finish_selection();
+            // Auto-copy on selection (like opencode)
+            if let Some(text) = app.get_selected_text() {
+                if !text.is_empty() {
+                    if let Ok(mut ctx) = arboard::Clipboard::new() {
+                        let _ = ctx.set_text(&text);
+                        // Also write OSC 52 for SSH/tmux support
+                        write_osc52(&text);
+                        app.status = format!("Copied {} chars", text.len());
+                        return true;
+                    }
+                }
+            }
+            false
         }
-        _ => {}
+        _ => false,
     }
+}
+
+/// Write text to clipboard via OSC 52 escape sequence.
+/// This allows clipboard operations to work over SSH by having
+/// the terminal emulator handle the clipboard locally.
+fn write_osc52(text: &str) {
+    use std::io::Write;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    
+    let base64 = STANDARD.encode(text);
+    let osc52 = format!("\x1b]52;c;{}\x07", base64);
+    
+    // Check if we're in tmux or screen
+    let passthrough = std::env::var("TMUX").is_ok() || std::env::var("STY").is_ok();
+    let sequence = if passthrough {
+        format!("\x1bPtmux;\x1b{}\x1b\\", osc52)
+    } else {
+        osc52
+    };
+    
+    let _ = std::io::stdout().write_all(sequence.as_bytes());
+    let _ = std::io::stdout().flush();
 }
 
 pub async fn handle_key_event(
@@ -106,22 +148,18 @@ pub async fn handle_app_message(
             handle_worker_started(app, session_id, worker_id, opencode_session_id);
         }
         AppMessage::WorkerOutput(session_id, worker_id, line) => {
-            if let Some(session) = app.sessions.iter_mut().find(|s| s.id == session_id) {
-                if let Some(worker) = session.workers.iter_mut().find(|w| w.id == worker_id) {
-                    worker.output.push(line);
-                }
-            }
+            app.update_worker(session_id, worker_id, |worker| {
+                worker.output.push(line);
+            });
         }
         AppMessage::WorkerComplete(session_id, worker_id) => {
             handle_worker_complete(app, session_id, worker_id);
         }
         AppMessage::WorkerError(session_id, worker_id, error) => {
-            if let Some(session) = app.sessions.iter_mut().find(|s| s.id == session_id) {
-                if let Some(worker) = session.workers.iter_mut().find(|w| w.id == worker_id) {
-                    worker.state = WorkerState::Error;
-                    worker.output.push(format!("Error: {}", error));
-                }
-            }
+            app.update_worker(session_id, worker_id, |worker| {
+                worker.state = WorkerState::Error;
+                worker.output.push(format!("Error: {}", error));
+            });
         }
         AppMessage::StreamEvent(event) => {
             handle_stream_event(app, event, server, tx).await;
@@ -977,7 +1015,7 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('i') | KeyCode::Enter => app.input_mode = true,
         KeyCode::Char('j') | KeyCode::Down => {
             if app.show_logs {
-                app.logs_scroll = app.logs_scroll.saturating_add(1);
+                app.logs_scroll_state.scroll_by(1);
             } else if has_selected_worker {
                 app.current_session_mut().scroll_offset += 1;
             } else {
@@ -986,7 +1024,7 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('k') | KeyCode::Up => {
             if app.show_logs {
-                app.logs_scroll = app.logs_scroll.saturating_sub(1);
+                app.logs_scroll_state.scroll_by(-1);
             } else if has_selected_worker {
                 app.current_session_mut().scroll_offset =
                     app.current_session().scroll_offset.saturating_sub(1);
@@ -1029,37 +1067,36 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
         }
         KeyCode::PageDown | KeyCode::Char('J') => {
             if app.show_logs {
-                app.logs_scroll = app.logs_scroll.saturating_add(20);
+                app.logs_scroll_state.scroll_by(PAGE_SCROLL_LINES as isize);
             } else {
-                app.current_session_mut().scroll_offset += 10;
+                app.main_scroll_state.scroll_by(LINE_SCROLL_AMOUNT as isize);
             }
         }
         KeyCode::PageUp | KeyCode::Char('K') => {
             if app.show_logs {
-                app.logs_scroll = app.logs_scroll.saturating_sub(20);
+                app.logs_scroll_state.scroll_by(-(PAGE_SCROLL_LINES as isize));
             } else {
-                app.current_session_mut().scroll_offset =
-                    app.current_session().scroll_offset.saturating_sub(10);
+                app.main_scroll_state.scroll_by(-(LINE_SCROLL_AMOUNT as isize));
             }
         }
         KeyCode::Home | KeyCode::Char('g') => {
             if app.show_logs {
-                app.logs_scroll = 0;
+                app.logs_scroll_state.scroll_to_top();
             } else {
-                app.current_session_mut().scroll_offset = 0;
+                app.main_scroll_state.scroll_to_top();
             }
         }
         KeyCode::End | KeyCode::Char('G') => {
             if app.show_logs {
-                app.logs_scroll = app.orchestrator_logs.len().saturating_sub(1);
+                app.logs_scroll_state.scroll_to_bottom();
             } else {
-                app.current_session_mut().scroll_offset = usize::MAX;
+                app.main_scroll_state.scroll_to_bottom();
             }
         }
         KeyCode::Char('l') => {
             app.show_logs = !app.show_logs;
             if app.show_logs {
-                app.logs_scroll = app.orchestrator_logs.len().saturating_sub(1);
+                app.logs_scroll_state.scroll_to_bottom();
             }
         }
         KeyCode::Esc => {
@@ -1082,7 +1119,7 @@ fn handle_task_plan(
     orch_session_id: String,
 ) {
     app.orchestrator_logs.extend(logs);
-    if let Some(session) = app.sessions.iter_mut().find(|s| s.id == session_id) {
+    if let Some(session) = app.find_session_mut(session_id) {
         if session.orchestrator_session_id.is_none() {
             session.orchestrator_session_id = Some(orch_session_id);
         }
@@ -1114,23 +1151,20 @@ fn handle_worker_started(
 ) {
     app.orchestrator_logs
         .push(format!("[WORKER] #{} started", worker_id));
-    if let Some(session) = app.sessions.iter_mut().find(|s| s.id == session_id) {
-        if let Some(worker) = session.workers.iter_mut().find(|w| w.id == worker_id) {
-            worker.session_id = Some(opencode_session_id);
-            worker.state = WorkerState::Running;
-            worker.output.push("Started...".to_string());
-        }
-    }
+    app.update_worker(session_id, worker_id, |worker| {
+        worker.session_id = Some(opencode_session_id);
+        worker.state = WorkerState::Running;
+        worker.output.push("Started...".to_string());
+    });
 }
 
 fn handle_worker_complete(app: &mut App, session_id: usize, worker_id: u32) {
-    if let Some(session) = app.sessions.iter_mut().find(|s| s.id == session_id) {
-        if let Some(worker) = session.workers.iter_mut().find(|w| w.id == worker_id) {
-            worker.state = WorkerState::Complete;
-            worker.output.push("Complete".to_string());
-        }
-        let all_done = session.workers.iter().all(|w| w.state.is_terminal());
-        if all_done {
+    app.update_worker(session_id, worker_id, |worker| {
+        worker.state = WorkerState::Complete;
+        worker.output.push("Complete".to_string());
+    });
+    if let Some(session) = app.find_session(session_id) {
+        if session.workers.iter().all(|w| w.state.is_terminal()) {
             app.status = "All workers complete".to_string();
         }
     }
@@ -1351,7 +1385,7 @@ async fn handle_report_to_orchestrator(
     server: &OpenCodeServer,
     tx: &Sender<AppMessage>,
 ) {
-    if let Some(session) = app.sessions.iter().find(|s| s.id == ui_session_id) {
+    if let Some(session) = app.find_session(ui_session_id) {
         if let Some(orch_session_id) = &session.orchestrator_session_id {
             let server_clone = server.clone();
             let orch_session_id = orch_session_id.clone();

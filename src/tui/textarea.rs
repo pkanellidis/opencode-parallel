@@ -61,7 +61,7 @@ impl EnhancedTextArea {
         self.textarea
             .lines()
             .first()
-            .map_or(false, |l| l.starts_with(prefix))
+            .is_some_and(|l| l.starts_with(prefix))
     }
 
     pub fn clear(&mut self) {
@@ -88,10 +88,8 @@ impl EnhancedTextArea {
     }
 
     pub fn add_to_history(&mut self, entry: String) {
-        if !entry.trim().is_empty() {
-            if self.history.last() != Some(&entry) {
-                self.history.push(entry);
-            }
+        if !entry.trim().is_empty() && self.history.last() != Some(&entry) {
+            self.history.push(entry);
         }
         self.history_index = None;
         self.current_input.clear();
@@ -122,7 +120,7 @@ impl EnhancedTextArea {
 
     pub fn history_next(&mut self) {
         match self.history_index {
-            None => return,
+            None => (),
             Some(idx) => {
                 if idx + 1 >= self.history.len() {
                     self.history_index = None;

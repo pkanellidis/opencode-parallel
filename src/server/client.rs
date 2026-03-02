@@ -12,6 +12,7 @@ use tokio::time::{sleep, Duration};
 use super::events::StreamEvent;
 use super::logs::ServerLogs;
 use super::types::*;
+use crate::constants::{HEALTH_CHECK_DELAY_MS, HEALTH_CHECK_MAX_ITERATIONS};
 use crate::utils::truncate_str;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -751,9 +752,8 @@ impl ServerProcess {
 
         let server = OpenCodeServer::new(port);
 
-        // Wait for server to become healthy
-        for _ in 0..50 {
-            sleep(Duration::from_millis(100)).await;
+        for _ in 0..HEALTH_CHECK_MAX_ITERATIONS {
+            sleep(Duration::from_millis(HEALTH_CHECK_DELAY_MS)).await;
             if server.is_healthy().await {
                 return Ok(Self { child });
             }

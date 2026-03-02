@@ -5,6 +5,7 @@ use crate::server::OpenCodeServer;
 
 use super::commands::{get_suggestions, CommandSuggestion};
 use super::messages::{ModelOption, PendingPermission};
+use super::scroll::{ScrollDirection, ScrollState};
 use super::selection::TextSelection;
 use super::session::Session;
 use super::textarea::EnhancedTextArea;
@@ -65,8 +66,10 @@ pub struct App {
     pub stop_selector_selections: Vec<usize>,
     /// Cursor position in stop selector.
     pub stop_selector_cursor: usize,
-    /// Scroll position in main content area.
-    pub main_scroll: usize,
+    /// Scroll state for main content area (with acceleration).
+    pub main_scroll_state: ScrollState,
+    /// Scroll state for logs panel (with acceleration).
+    pub logs_scroll_state: ScrollState,
     /// Current text selection (for copy).
     pub selection: Option<TextSelection>,
     /// Content lines for the main view (used for selection/copy).
@@ -107,11 +110,48 @@ impl App {
             show_stop_selector: false,
             stop_selector_selections: Vec::new(),
             stop_selector_cursor: 0,
-            main_scroll: 0,
+            main_scroll_state: ScrollState::new(),
+            logs_scroll_state: ScrollState::new(),
             selection: None,
             content_lines: Vec::new(),
             current_model: None,
         }
+    }
+
+    /// Handle scroll event for the appropriate panel.
+    pub fn handle_scroll(&mut self, direction: ScrollDirection) {
+        if self.show_logs {
+            self.logs_scroll_state.handle_scroll(direction);
+        } else {
+            self.main_scroll_state.handle_scroll(direction);
+        }
+    }
+
+    /// Update scroll state (call each frame for momentum scrolling).
+    pub fn tick_scroll(&mut self) -> bool {
+        let main_changed = self.main_scroll_state.tick();
+        let logs_changed = self.logs_scroll_state.tick();
+        main_changed || logs_changed
+    }
+
+    /// Get main scroll offset.
+    pub fn main_scroll(&self) -> usize {
+        self.main_scroll_state.offset
+    }
+
+    /// Get logs scroll offset.
+    pub fn logs_scroll(&self) -> usize {
+        self.logs_scroll_state.offset
+    }
+
+    /// Set main scroll dimensions.
+    pub fn set_main_scroll_dimensions(&mut self, total: usize, visible: usize) {
+        self.main_scroll_state.set_dimensions(total, visible);
+    }
+
+    /// Set logs scroll dimensions.
+    pub fn set_logs_scroll_dimensions(&mut self, total: usize, visible: usize) {
+        self.logs_scroll_state.set_dimensions(total, visible);
     }
 
     /// Returns the current input text (all lines joined).
@@ -321,6 +361,31 @@ impl App {
                 .iter()
                 .any(|w| w.session_id.as_deref() == Some(session_id))
         })
+    }
+
+    /// Finds a mutable session by its ID.
+    pub fn find_session_mut(&mut self, session_id: usize) -> Option<&mut Session> {
+        self.sessions.iter_mut().find(|s| s.id == session_id)
+    }
+
+    /// Finds a session by its ID (immutable).
+    pub fn find_session(&self, session_id: usize) -> Option<&Session> {
+        self.sessions.iter().find(|s| s.id == session_id)
+    }
+
+    /// Updates a worker in a session by applying a closure.
+    /// Returns true if the worker was found and updated.
+    pub fn update_worker<F>(&mut self, session_id: usize, worker_id: u32, f: F) -> bool
+    where
+        F: FnOnce(&mut super::worker::Worker),
+    {
+        if let Some(session) = self.find_session_mut(session_id) {
+            if let Some(worker) = session.workers.iter_mut().find(|w| w.id == worker_id) {
+                f(worker);
+                return true;
+            }
+        }
+        false
     }
 
     /// Adds a log message to the orchestrator logs.
@@ -533,19 +598,21 @@ mod tests {
     #[test]
     fn logs_scroll_defaults_to_zero() {
         let app = create_test_app();
-        assert_eq!(app.logs_scroll, 0);
+        assert_eq!(app.logs_scroll(), 0);
     }
 
     #[test]
     fn logs_scroll_can_be_modified() {
         let mut app = create_test_app();
-        app.logs_scroll = 10;
-        assert_eq!(app.logs_scroll, 10);
+        app.logs_scroll_state.set_dimensions(100, 20);
 
-        app.logs_scroll = app.logs_scroll.saturating_sub(5);
-        assert_eq!(app.logs_scroll, 5);
+        app.logs_scroll_state.scroll_to(10);
+        assert_eq!(app.logs_scroll(), 10);
 
-        app.logs_scroll = app.logs_scroll.saturating_add(3);
-        assert_eq!(app.logs_scroll, 8);
+        app.logs_scroll_state.scroll_by(-5);
+        assert_eq!(app.logs_scroll(), 5);
+
+        app.logs_scroll_state.scroll_by(3);
+        assert_eq!(app.logs_scroll(), 8);
     }
 }

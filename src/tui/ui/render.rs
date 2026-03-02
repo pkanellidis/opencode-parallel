@@ -10,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::constants::{MAX_INPUT_HEIGHT, MIN_INPUT_HEIGHT, SIDEBAR_WIDTH};
 use crate::tui::app::App;
 use crate::tui::worker::WorkerState;
 use crate::utils::truncate_str;
@@ -79,12 +80,12 @@ fn calculate_input_height(app: &App, available_width: u16) -> u16 {
         if line_len == 0 {
             wrapped_lines += 1;
         } else {
-            wrapped_lines += ((line_len + content_width - 1) / content_width).max(1) as u16;
+            wrapped_lines += line_len.div_ceil(content_width).max(1) as u16;
         }
     }
 
     let lines_needed = wrapped_lines.max(line_count).max(1);
-    (lines_needed + 3).clamp(4, 12)
+    (lines_needed + 3).clamp(MIN_INPUT_HEIGHT, MAX_INPUT_HEIGHT)
 }
 
 /// Main UI rendering entry point.
@@ -113,13 +114,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     if app.show_logs {
         render_logs_panel(f, app, main_layout[0]);
     } else if has_workers {
-        // Split into workers sidebar and main content
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(32), // Workers sidebar
-                Constraint::Min(0),     // Main content
-            ])
+            .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(0)])
             .split(main_layout[0]);
 
         render_workers_sidebar(f, app, content_layout[0]);
@@ -332,7 +329,6 @@ fn render_main_content(f: &mut Frame, app: &mut App, area: Rect) {
 fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     // Clone messages to avoid borrow conflicts
     let messages: Vec<(String, bool)> = app.current_session().messages.clone();
-    let scroll_offset = app.current_session().scroll_offset;
     let wrap_width = area.width.saturating_sub(2) as usize; // Leave room for indent and scrollbar
 
     // Build lines with background info and plain text for selection
@@ -404,7 +400,10 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
 
     let total_lines = styled_lines.len();
     let visible_height = area.height as usize;
-    let scroll = scroll_offset.min(total_lines.saturating_sub(visible_height));
+
+    // Update scroll state dimensions and get scroll position
+    app.set_main_scroll_dimensions(total_lines, visible_height);
+    let scroll = app.main_scroll();
 
     // Populate content_lines for selection (screen row -> plain text)
     let screen_height = f.area().height;
@@ -682,20 +681,20 @@ fn render_logs_panel(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block.clone(), area);
     let inner = block.inner(area);
 
-    let logs = &app.orchestrator_logs;
-    let total_lines = logs.len();
+    let total_lines = app.orchestrator_logs.len();
     let visible_height = inner.height as usize;
     let max_scroll = total_lines.saturating_sub(visible_height);
-    let scroll = app.logs_scroll.min(max_scroll);
 
-    // Populate content_lines for selection
+    app.set_logs_scroll_dimensions(total_lines, visible_height);
+    let scroll = app.logs_scroll();
+
     app.content_lines.clear();
     for row in 0..f.area().height {
         if row < inner.y || row >= inner.y + inner.height {
             app.content_lines.push(String::new());
         } else {
             let line_idx = scroll + (row - inner.y) as usize;
-            if let Some(log) = logs.get(line_idx) {
+            if let Some(log) = app.orchestrator_logs.get(line_idx) {
                 app.content_lines.push(log.clone());
             } else {
                 app.content_lines.push(String::new());
@@ -703,14 +702,13 @@ fn render_logs_panel(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Render lines with selection highlighting
     for (i, line_idx) in (scroll..scroll + visible_height).enumerate() {
         let y = inner.y + i as u16;
         if y >= inner.y + inner.height {
             break;
         }
 
-        if let Some(log) = logs.get(line_idx) {
+        if let Some(log) = app.orchestrator_logs.get(line_idx) {
             let line_area = Rect {
                 x: inner.x,
                 y,
@@ -899,11 +897,6 @@ mod tests {
     }
 
     #[test]
-    fn render_functions_exist() {
-        assert!(true);
-    }
-
-    #[test]
     fn app_show_logs_affects_rendering_path() {
         let mut app = create_test_app();
 
@@ -930,13 +923,14 @@ mod tests {
             app.orchestrator_logs.push(format!("Log line {}", i));
         }
 
-        // Scroll should be bounded
-        app.logs_scroll = 50;
-        assert_eq!(app.logs_scroll, 50);
+        // Set dimensions and scroll should be bounded
+        app.set_logs_scroll_dimensions(100, 20);
+        app.logs_scroll_state.scroll_to(50);
+        assert_eq!(app.logs_scroll(), 50);
 
-        // Saturating sub prevents underflow
-        app.logs_scroll = app.logs_scroll.saturating_sub(100);
-        assert_eq!(app.logs_scroll, 0);
+        // Scroll by negative prevents underflow
+        app.logs_scroll_state.scroll_by(-100);
+        assert_eq!(app.logs_scroll(), 0);
     }
 
     #[test]

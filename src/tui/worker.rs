@@ -2,6 +2,7 @@
 //!
 //! Workers are parallel task executors that run in separate OpenCode sessions.
 
+use crate::constants::SUMMARY_LINE_LIMIT;
 use crate::utils::truncate_str;
 
 /// The current state of a worker.
@@ -132,12 +133,12 @@ impl Worker {
 
         let summary: String = lines
             .iter()
-            .take(10)
+            .take(SUMMARY_LINE_LIMIT)
             .copied()
             .collect::<Vec<&str>>()
             .join("\n");
 
-        if lines.len() > 10 {
+        if lines.len() > SUMMARY_LINE_LIMIT {
             format!("{}...", summary)
         } else {
             summary

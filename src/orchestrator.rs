@@ -2,15 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::server::OpenCodeServer;
-
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() > max_chars {
-        format!("{}...", chars[..max_chars].iter().collect::<String>())
-    } else {
-        s.to_string()
-    }
-}
+use crate::utils::truncate_str;
 
 const ORCHESTRATOR_SYSTEM_PROMPT: &str = r#"You are an AI task orchestrator. Your job is to analyze user requests and decide how to split them into parallel tasks.
 

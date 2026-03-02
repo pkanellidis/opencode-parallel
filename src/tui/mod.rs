@@ -5,6 +5,7 @@
 pub mod app;
 pub mod commands;
 pub mod messages;
+pub mod scroll;
 pub mod selection;
 pub mod session;
 pub mod textarea;
@@ -37,6 +38,7 @@ use ratatui::{
 use std::io;
 use tokio::sync::mpsc;
 
+use crate::constants::{CHANNEL_BUFFER_SIZE, DEFAULT_PORT, POLL_TIMEOUT_MS};
 use crate::server::{OpenCodeServer, ServerProcess, StreamEvent};
 
 pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
@@ -54,9 +56,8 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
         f.render_widget(block, area);
     })?;
 
-    let port = 14096u16;
-    let mut server_process: ServerProcess = ServerProcess::start(port).await?;
-    let server = OpenCodeServer::new(port);
+    let mut server_process: ServerProcess = ServerProcess::start(DEFAULT_PORT).await?;
+    let server = OpenCodeServer::new(DEFAULT_PORT);
 
     let mut app = App::new(server.clone());
 
@@ -67,9 +68,8 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     app.status = "Ready - Type your task".to_string();
     terminal.draw(|f| ui(f, &mut app))?;
 
-    let (tx, mut rx) = mpsc::channel::<AppMessage>(100);
+    let (tx, mut rx) = mpsc::channel::<AppMessage>(CHANNEL_BUFFER_SIZE);
 
-    // Fetch current model on startup
     let server_clone = server.clone();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
@@ -82,7 +82,7 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
         }
     });
 
-    let (sse_tx, mut sse_rx) = mpsc::channel::<StreamEvent>(100);
+    let (sse_tx, mut sse_rx) = mpsc::channel::<StreamEvent>(CHANNEL_BUFFER_SIZE);
     server.subscribe_events(sse_tx);
 
     let tx_sse = tx.clone();
@@ -95,12 +95,15 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     });
 
     loop {
+        // Update scroll state for momentum scrolling
+        app.tick_scroll();
+        
         terminal.draw(|f| ui(f, &mut app))?;
 
-        if event::poll(std::time::Duration::from_millis(50))? {
+        if event::poll(std::time::Duration::from_millis(POLL_TIMEOUT_MS))? {
             match event::read()? {
                 Event::Mouse(mouse) => {
-                    handlers::handle_mouse_event(&mut app, mouse);
+                    let _ = handlers::handle_mouse_event(&mut app, mouse);
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     handlers::handle_key_event(&mut app, key, &server, &tx).await;
