@@ -56,8 +56,8 @@ pub enum AppMessage {
     OrchestratorLog(usize, String),
     /// Server logs updated.
     ServerLogs(Vec<String>),
-    /// Task plan received from orchestrator.
-    TaskPlan(usize, TaskPlan, Vec<String>, String),
+    /// Task plan received from orchestrator. Fields: session_id, plan, logs, orch_session_id, id_offset.
+    TaskPlan(usize, TaskPlan, Vec<String>, String, u32),
     /// A worker has started.
     WorkerStarted(usize, u32, String),
     /// Worker produced output.

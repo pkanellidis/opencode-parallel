@@ -141,8 +141,8 @@ pub async fn handle_app_message(
                 }
             }
         }
-        AppMessage::TaskPlan(session_id, plan, logs, orch_session_id) => {
-            handle_task_plan(app, session_id, plan, logs, orch_session_id);
+        AppMessage::TaskPlan(session_id, plan, logs, orch_session_id, id_offset) => {
+            handle_task_plan(app, session_id, plan, logs, orch_session_id, id_offset);
         }
         AppMessage::WorkerStarted(session_id, worker_id, opencode_session_id) => {
             handle_worker_started(app, session_id, worker_id, opencode_session_id);
@@ -276,6 +276,13 @@ async fn handle_submit_input(
         let session_id = app.current_session().id;
         let existing_orch_session = app.current_session().orchestrator_session_id.clone();
         let current_model = app.current_model.clone();
+        let id_offset = app
+            .current_session()
+            .workers
+            .iter()
+            .map(|w| w.id)
+            .max()
+            .unwrap_or(0);
         app.current_session_mut()
             .messages
             .push((format!("> {}", message), true));
@@ -330,13 +337,14 @@ async fn handle_submit_input(
                             plan.clone(),
                             logs,
                             orch_session_id,
+                            id_offset,
                         ))
                         .await;
 
                     for task in plan.tasks {
                         let server = server_clone.clone();
                         let tx = tx_clone.clone();
-                        let task_id = task.id;
+                        let task_id = id_offset + task.id;
                         let prompt = task.prompt.clone();
                         let model = current_model.clone();
 
@@ -1117,14 +1125,13 @@ fn handle_task_plan(
     plan: crate::orchestrator::TaskPlan,
     logs: Vec<String>,
     orch_session_id: String,
+    id_offset: u32,
 ) {
     app.orchestrator_logs.extend(logs);
     if let Some(session) = app.find_session_mut(session_id) {
         if session.orchestrator_session_id.is_none() {
             session.orchestrator_session_id = Some(orch_session_id);
         }
-        session.workers.clear();
-        session.selected_worker = None;
         session
             .messages
             .push((format!("Plan: {}", plan.reasoning), false));
@@ -1132,12 +1139,13 @@ fn handle_task_plan(
             .messages
             .push((format!("Spawning {} workers...", plan.tasks.len()), false));
         for task in &plan.tasks {
+            let new_id = id_offset + task.id;
             session
                 .messages
-                .push((format!("  #{}: {}", task.id, task.description), false));
+                .push((format!("  #{}: {}", new_id, task.description), false));
             session
                 .workers
-                .push(Worker::new(task.id, task.description.clone()));
+                .push(Worker::new(new_id, task.description.clone()));
         }
     }
     app.status = format!("Running {} workers", plan.tasks.len());

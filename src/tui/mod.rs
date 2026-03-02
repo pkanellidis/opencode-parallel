@@ -24,7 +24,10 @@ pub use worker::{Worker, WorkerState};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -45,6 +48,18 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+    // Enable enhanced keyboard protocol for proper Shift+Enter detection
+    // This uses the Kitty keyboard protocol which is supported by modern terminals
+    let supports_keyboard_enhancement = crossterm::terminal::supports_keyboard_enhancement()
+        .unwrap_or(false);
+    if supports_keyboard_enhancement {
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
+        )?;
+    }
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -122,6 +137,14 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     }
 
     server_process.stop().await?;
+
+    // Pop keyboard enhancement flags if we pushed them
+    let supports_keyboard_enhancement = crossterm::terminal::supports_keyboard_enhancement()
+        .unwrap_or(false);
+    if supports_keyboard_enhancement {
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    }
+
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
