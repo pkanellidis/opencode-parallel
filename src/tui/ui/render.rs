@@ -10,7 +10,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::constants::{MAX_INPUT_HEIGHT, MIN_INPUT_HEIGHT, SIDEBAR_WIDTH};
+use crate::constants::{
+    DETAIL_PANEL_MIN_WIDTH, DETAIL_PANEL_RATIO, MAX_INPUT_HEIGHT, MIN_INPUT_HEIGHT, SIDEBAR_WIDTH,
+};
 use crate::tui::app::App;
 use crate::tui::worker::WorkerState;
 use crate::utils::truncate_str;
@@ -92,6 +94,9 @@ fn calculate_input_height(app: &App, available_width: u16) -> u16 {
 /// Main UI rendering entry point.
 pub fn ui(f: &mut Frame, app: &mut App) {
     app.content_lines.clear();
+    app.detail_content_lines.clear();
+    app.messages_panel_area = None;
+    app.detail_panel_area = None;
     // Fill entire screen with black background
     let bg_block = Block::default().style(Style::default().bg(BG_PRIMARY));
     f.render_widget(bg_block, f.area());
@@ -115,13 +120,34 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     if app.show_logs {
         render_logs_panel(f, app, main_layout[0]);
     } else if has_workers {
-        let content_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(0)])
-            .split(main_layout[0]);
+        let selected_worker_idx = app.current_session().selected_worker;
+        let show_detail_panel = selected_worker_idx.is_some();
+        let remaining_width = main_layout[0].width.saturating_sub(SIDEBAR_WIDTH);
 
-        render_workers_sidebar(f, app, content_layout[0]);
-        render_main_content(f, app, content_layout[1]);
+        if show_detail_panel && remaining_width >= DETAIL_PANEL_MIN_WIDTH * 2 {
+            let detail_width =
+                (remaining_width * DETAIL_PANEL_RATIO / 100).max(DETAIL_PANEL_MIN_WIDTH);
+            let content_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(SIDEBAR_WIDTH),
+                    Constraint::Min(30),
+                    Constraint::Length(detail_width),
+                ])
+                .split(main_layout[0]);
+
+            render_workers_sidebar(f, app, content_layout[0]);
+            render_messages(f, app, content_layout[1]);
+            render_worker_detail_panel(f, app, content_layout[2]);
+        } else {
+            let content_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(0)])
+                .split(main_layout[0]);
+
+            render_workers_sidebar(f, app, content_layout[0]);
+            render_main_content(f, app, content_layout[1]);
+        }
     } else {
         // Landing view - just show welcome/prompt area
         render_landing(f, app, main_layout[0]);
@@ -208,6 +234,8 @@ fn render_landing(f: &mut Frame, app: &mut App, area: Rect) {
 /// Renders the workers sidebar.
 fn render_workers_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let session = app.current_session();
+    let has_selected = session.selected_worker.is_some();
+    let is_focused = !app.focus_detail_panel || !has_selected;
 
     let inner_area = Rect {
         x: area.x + 1,
@@ -216,10 +244,14 @@ fn render_workers_sidebar(f: &mut Frame, app: &App, area: Rect) {
         height: area.height.saturating_sub(1),
     };
 
-    // Sidebar border only (pitch black bg)
+    let border_color = if is_focused && has_selected {
+        ACCENT
+    } else {
+        BORDER
+    };
     let panel = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(BORDER));
+        .border_style(Style::default().fg(border_color));
     f.render_widget(panel, area);
 
     // Header
@@ -307,7 +339,7 @@ fn render_workers_sidebar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(list, list_area);
 }
 
-/// Renders the main content area (messages or worker output).
+/// Renders the main content area (messages only - worker detail is in side panel).
 fn render_main_content(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_area = Rect {
         x: area.x + 2,
@@ -316,23 +348,53 @@ fn render_main_content(f: &mut Frame, app: &mut App, area: Rect) {
         height: area.height.saturating_sub(2),
     };
 
-    let selected_worker_idx = app.current_session().selected_worker;
-    if let Some(idx) = selected_worker_idx {
-        let worker = app.current_session().workers.get(idx).cloned();
-        if let Some(worker) = worker {
-            render_worker_output(f, app, &worker, inner_area);
-            return;
-        }
-    }
-
     render_messages(f, app, inner_area);
 }
 
 /// Renders the message history with distinct styling for user vs response messages.
 fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
-    // Clone messages to avoid borrow conflicts
+    // Track panel area for position-based scroll routing
+    app.messages_panel_area = Some(area);
+
+    let has_selected_worker = app.current_session().selected_worker.is_some();
+    let is_focused = !app.focus_detail_panel || !has_selected_worker;
+
+    let (inner_area, effective_area) = if has_selected_worker {
+        let border_color = if is_focused { ACCENT } else { BORDER };
+        let block = Block::default()
+            .borders(Borders::NONE)
+            .style(Style::default().bg(BG_PRIMARY));
+        f.render_widget(block, area);
+
+        if is_focused {
+            let focus_indicator = Line::from(vec![
+                Span::styled("Messages", Style::default().fg(border_color).bold()),
+                Span::styled(" · Tab: switch to detail", Style::default().fg(TEXT_DIM)),
+            ]);
+            let indicator_area = Rect {
+                x: area.x + 2,
+                y: area.y,
+                width: area.width.saturating_sub(4),
+                height: 1,
+            };
+            f.render_widget(Paragraph::new(focus_indicator), indicator_area);
+        }
+
+        let inner = Rect {
+            x: area.x + 2,
+            y: area.y + 1,
+            width: area.width.saturating_sub(4),
+            height: area.height.saturating_sub(2),
+        };
+        (inner, area)
+    } else {
+        (area, area)
+    };
+
+    let _ = effective_area;
+
     let messages: Vec<(String, bool)> = app.current_session().messages.clone();
-    let wrap_width = area.width.saturating_sub(2) as usize; // Leave room for indent and scrollbar
+    let wrap_width = inner_area.width.saturating_sub(2) as usize;
 
     // Build lines with background info and plain text for selection
     let mut styled_lines: Vec<(Line, bool, String)> = Vec::new(); // (line, is_user, plain_text)
@@ -402,20 +464,18 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let total_lines = styled_lines.len();
-    let visible_height = area.height as usize;
+    let visible_height = inner_area.height as usize;
 
-    // Update scroll state dimensions and get scroll position
     app.set_main_scroll_dimensions(total_lines, visible_height);
     let scroll = app.main_scroll();
 
-    // Populate content_lines for selection (screen row -> plain text)
-    app.content_area_x = area.x;
+    app.content_area_x = inner_area.x;
     let screen_height = f.area().height;
     for row in 0..screen_height {
-        if row < area.y || row >= area.y + area.height {
+        if row < inner_area.y || row >= inner_area.y + inner_area.height {
             app.content_lines.push(String::new());
         } else {
-            let line_idx = scroll + (row - area.y) as usize;
+            let line_idx = scroll + (row - inner_area.y) as usize;
             if let Some((_, _, plain)) = styled_lines.get(line_idx) {
                 app.content_lines.push(plain.clone());
             } else {
@@ -424,7 +484,6 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Render each line with appropriate background
     let visible_lines: Vec<(Line, bool, String)> = styled_lines
         .into_iter()
         .skip(scroll)
@@ -434,15 +493,15 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     let selection = app.selection.clone();
 
     for (i, (line, is_user, plain)) in visible_lines.iter().enumerate() {
-        let y = area.y + i as u16;
-        if y >= area.y + area.height {
+        let y = inner_area.y + i as u16;
+        if y >= inner_area.y + inner_area.height {
             break;
         }
 
         let line_area = Rect {
-            x: area.x,
+            x: inner_area.x,
             y,
-            width: area.width.saturating_sub(1),
+            width: inner_area.width.saturating_sub(1),
             height: 1,
         };
 
@@ -450,12 +509,11 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
         let bg_block = Block::default().style(Style::default().bg(bg));
         f.render_widget(bg_block, line_area);
 
-        // Check if this row has selection
         if let Some(ref sel) = selection {
-            if let Some((col_start, col_end)) = sel.row_range(y, area.x + plain.len() as u16) {
-                // Convert screen coordinates to content-relative coordinates
-                let rel_start = col_start.saturating_sub(area.x);
-                let rel_end = col_end.saturating_sub(area.x);
+            if let Some((col_start, col_end)) = sel.row_range(y, inner_area.x + plain.len() as u16)
+            {
+                let rel_start = col_start.saturating_sub(inner_area.x);
+                let rel_end = col_end.saturating_sub(inner_area.x);
                 if rel_end > rel_start {
                     render_line_with_selection(f, line, line_area, rel_start, rel_end);
                     continue;
@@ -467,13 +525,12 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(para, line_area);
     }
 
-    // Scrollbar if needed
     if total_lines > visible_height {
         let scrollbar_area = Rect {
-            x: area.x + area.width - 1,
-            y: area.y,
+            x: inner_area.x + inner_area.width - 1,
+            y: inner_area.y,
             width: 1,
-            height: area.height,
+            height: inner_area.height,
         };
 
         let mut scrollbar_state =
@@ -509,16 +566,40 @@ fn render_line_with_selection(
     f.render_widget(para, area);
 }
 
-/// Renders a worker's output.
-fn render_worker_output(
-    f: &mut Frame,
-    app: &mut App,
-    worker: &crate::tui::worker::Worker,
-    area: Rect,
-) {
-    let scroll_offset = app.current_session().scroll_offset;
+/// Renders the worker detail panel on the right side.
+fn render_worker_detail_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    // Track panel area for position-based scroll routing
+    app.detail_panel_area = Some(area);
 
-    // Header with worker info
+    let session = app.current_session();
+    let selected_idx = match session.selected_worker {
+        Some(idx) => idx,
+        None => return,
+    };
+
+    let worker = match session.workers.get(selected_idx) {
+        Some(w) => w.clone(),
+        None => return,
+    };
+
+    let is_focused = app.focus_detail_panel;
+    let border_color = if is_focused { ACCENT } else { BORDER };
+
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(border_color))
+        .style(Style::default().bg(BG_PANEL));
+
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+
+    let inner_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(2),
+        height: inner.height,
+    };
+
     let (status_text, status_color) = match worker.state {
         WorkerState::Starting => ("Starting...", STATUS_RUNNING),
         WorkerState::Running => ("Running", STATUS_RUNNING),
@@ -527,90 +608,132 @@ fn render_worker_output(
         WorkerState::Error => ("Error", ERROR),
     };
 
-    let header_text = format!(
-        "Worker #{} · {} · {}",
-        worker.id, worker.description, status_text
-    );
     let header = Line::from(vec![
         Span::styled(
             format!("Worker #{}", worker.id),
             Style::default().fg(ACCENT).bold(),
         ),
         Span::styled(" · ", Style::default().fg(TEXT_DIM)),
-        Span::styled(&worker.description, Style::default().fg(TEXT_SECONDARY)),
-        Span::styled(" · ", Style::default().fg(TEXT_DIM)),
         Span::styled(status_text, Style::default().fg(status_color)),
     ]);
 
-    let header_para = Paragraph::new(header);
     let header_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
+        x: inner_area.x,
+        y: inner_area.y,
+        width: inner_area.width,
         height: 1,
     };
-    f.render_widget(header_para, header_area);
+    f.render_widget(Paragraph::new(header), header_area);
 
-    // Separator
-    let sep_text = "─".repeat(area.width as usize);
+    let desc_area = Rect {
+        x: inner_area.x,
+        y: inner_area.y + 1,
+        width: inner_area.width,
+        height: 1,
+    };
+    let desc = Line::styled(
+        truncate_str(&worker.description, inner_area.width as usize),
+        Style::default().fg(TEXT_SECONDARY),
+    );
+    f.render_widget(Paragraph::new(desc), desc_area);
+
+    let sep_text = "─".repeat(inner_area.width as usize);
     let sep = Line::styled(&sep_text, Style::default().fg(BORDER));
     let sep_area = Rect {
-        x: area.x,
-        y: area.y + 1,
-        width: area.width,
+        x: inner_area.x,
+        y: inner_area.y + 2,
+        width: inner_area.width,
         height: 1,
     };
     f.render_widget(Paragraph::new(sep), sep_area);
 
-    // Output content
     let content_area = Rect {
-        x: area.x,
-        y: area.y + 3,
-        width: area.width,
-        height: area.height.saturating_sub(3),
+        x: inner_area.x,
+        y: inner_area.y + 3,
+        width: inner_area.width,
+        height: inner_area.height.saturating_sub(3),
     };
 
-    let display_lines = worker.get_display_lines();
+    let wrap_width = content_area.width.saturating_sub(2) as usize;
+    let mut display_lines: Vec<(String, Color)> = Vec::new();
+
+    for tool in &worker.tool_history {
+        let wrapped = wrap_text(&format!("✓ {}", tool), wrap_width, "  ");
+        for line in wrapped {
+            display_lines.push((line, SUCCESS));
+        }
+    }
+
+    if let Some(tool) = &worker.current_tool {
+        let wrapped = wrap_text(&format!("⚙ {}...", tool), wrap_width, "  ");
+        for line in wrapped {
+            display_lines.push((line, STATUS_RUNNING));
+        }
+    }
+
+    if !worker.tool_history.is_empty() || worker.current_tool.is_some() {
+        display_lines.push((String::new(), TEXT_PRIMARY));
+    }
+
+    let content = if !worker.streaming_content.is_empty() {
+        &worker.streaming_content
+    } else {
+        &worker.output.join("\n")
+    };
+
+    for line in content.lines() {
+        let wrapped = wrap_text(line, wrap_width, "");
+        for wrapped_line in wrapped {
+            let color = if wrapped_line.starts_with("Complete") {
+                SUCCESS
+            } else if wrapped_line.starts_with("Error") || wrapped_line.starts_with("✗") {
+                ERROR
+            } else {
+                TEXT_PRIMARY
+            };
+            display_lines.push((wrapped_line, color));
+        }
+    }
+
     let total_lines = display_lines.len();
     let visible_height = content_area.height as usize;
 
     let auto_scroll = worker.state == WorkerState::Running;
+    app.set_worker_detail_scroll_dimensions(total_lines, visible_height);
+
     let max_scroll = total_lines.saturating_sub(visible_height);
     let scroll = if auto_scroll {
         max_scroll
     } else {
-        scroll_offset.min(max_scroll)
+        app.worker_detail_scroll().min(max_scroll)
     };
 
-    // Populate content_lines for selection
-    app.content_area_x = content_area.x;
-    for row in 0..f.area().height {
+    // Track content lines for selection/copy (similar to messages panel)
+    app.detail_content_area_x = content_area.x;
+    app.detail_content_lines.clear();
+    let screen_height = f.area().height;
+    for row in 0..screen_height {
         if row < content_area.y || row >= content_area.y + content_area.height {
-            if row == area.y {
-                app.content_lines.push(header_text.clone());
-            } else if row == area.y + 1 {
-                app.content_lines.push(sep_text.clone());
-            } else {
-                app.content_lines.push(String::new());
-            }
+            app.detail_content_lines.push(String::new());
         } else {
             let line_idx = scroll + (row - content_area.y) as usize;
-            if let Some(line) = display_lines.get(line_idx) {
-                app.content_lines.push(line.clone());
+            if let Some((text, _)) = display_lines.get(line_idx) {
+                app.detail_content_lines.push(text.clone());
             } else {
-                app.content_lines.push(String::new());
+                app.detail_content_lines.push(String::new());
             }
         }
     }
 
-    // Render lines with potential selection highlighting
+    let selection = app.selection.clone();
+
     for (i, line_idx) in (scroll..scroll + visible_height).enumerate() {
         let y = content_area.y + i as u16;
         if y >= content_area.y + content_area.height {
             break;
         }
 
-        if let Some(line_text) = display_lines.get(line_idx) {
+        if let Some((line_text, fg)) = display_lines.get(line_idx) {
             let line_area = Rect {
                 x: content_area.x,
                 y,
@@ -618,47 +741,26 @@ fn render_worker_output(
                 height: 1,
             };
 
-            let fg = if line_text.starts_with('✓') || line_text.starts_with("Complete") {
-                SUCCESS
-            } else if line_text.starts_with('✗') || line_text.starts_with("Error") {
-                ERROR
-            } else if line_text.starts_with("⚙")
-                || line_text.starts_with("🔧")
-                || line_text.contains("Tool:")
-            {
-                STATUS_RUNNING
-            } else {
-                TEXT_PRIMARY
-            };
-
-            // Check for selection
-            if let Some(ref sel) = app.selection {
-                let line_end = content_area.x + line_text.len() as u16;
-                if let Some((col_start, col_end)) = sel.row_range(y, line_end) {
-                    // Convert screen coordinates to content-relative coordinates
+            // Check for selection highlighting
+            if let Some(ref sel) = selection {
+                if let Some((col_start, col_end)) =
+                    sel.row_range(y, content_area.x + line_text.len() as u16)
+                {
                     let rel_start = col_start.saturating_sub(content_area.x);
                     let rel_end = col_end.saturating_sub(content_area.x);
                     if rel_end > rel_start {
-                        let sel_area = Rect {
-                            x: content_area.x + rel_start,
-                            y,
-                            width: (rel_end - rel_start)
-                                .min(line_area.width.saturating_sub(rel_start)),
-                            height: 1,
-                        };
-                        let sel_block = Block::default().style(Style::default().bg(SELECTION_BG));
-                        f.render_widget(sel_block, sel_area);
+                        let line = Line::styled(line_text.as_str(), Style::default().fg(*fg));
+                        render_line_with_selection(f, &line, line_area, rel_start, rel_end);
+                        continue;
                     }
                 }
             }
 
-            let line = Line::styled(line_text.as_str(), Style::default().fg(fg));
-            let para = Paragraph::new(line);
-            f.render_widget(para, line_area);
+            let line = Line::styled(line_text.as_str(), Style::default().fg(*fg));
+            f.render_widget(Paragraph::new(line), line_area);
         }
     }
 
-    // Scrollbar
     if total_lines > visible_height {
         let scrollbar_area = Rect {
             x: content_area.x + content_area.width - 1,
@@ -668,10 +770,25 @@ fn render_worker_output(
         };
 
         let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
-        let scrollbar =
-            Scrollbar::new(ScrollbarOrientation::VerticalRight).style(Style::default().fg(BORDER));
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(border_color));
 
         f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
+
+    if is_focused {
+        let hint = "Tab: switch panel · j/k: scroll";
+        let hint_width = hint.len() as u16;
+        if inner_area.width > hint_width {
+            let hint_area = Rect {
+                x: inner_area.x + inner_area.width - hint_width,
+                y: inner_area.y,
+                width: hint_width,
+                height: 1,
+            };
+            let hint_para = Paragraph::new(Span::styled(hint, Style::default().fg(TEXT_DIM)));
+            f.render_widget(hint_para, hint_area);
+        }
     }
 }
 

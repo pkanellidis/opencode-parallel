@@ -9,8 +9,14 @@ pub const CHANNEL_BUFFER_SIZE: usize = 100;
 /// Poll timeout in milliseconds for the event loop.
 pub const POLL_TIMEOUT_MS: u64 = 50;
 
-/// Width of the sidebar in characters.
-pub const SIDEBAR_WIDTH: u16 = 32;
+/// Width of the workers sidebar in characters.
+pub const SIDEBAR_WIDTH: u16 = 30;
+
+/// Minimum width of the worker detail panel in characters.
+pub const DETAIL_PANEL_MIN_WIDTH: u16 = 40;
+
+/// Ratio of detail panel to main content (percentage of remaining width).
+pub const DETAIL_PANEL_RATIO: u16 = 45;
 
 /// Number of lines to scroll when paging.
 pub const PAGE_SCROLL_LINES: usize = 20;

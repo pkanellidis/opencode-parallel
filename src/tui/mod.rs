@@ -57,8 +57,8 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
 
     // Enable enhanced keyboard protocol for proper Shift+Enter detection
     // This uses the Kitty keyboard protocol which is supported by modern terminals
-    let supports_keyboard_enhancement = crossterm::terminal::supports_keyboard_enhancement()
-        .unwrap_or(false);
+    let supports_keyboard_enhancement =
+        crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     if supports_keyboard_enhancement {
         execute!(
             stdout,
@@ -118,7 +118,7 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     loop {
         // Update scroll state for momentum scrolling
         app.tick_scroll();
-        
+
         terminal.draw(|f| ui(f, &mut app))?;
 
         if event::poll(std::time::Duration::from_millis(POLL_TIMEOUT_MS))? {
@@ -148,8 +148,8 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     server_process.stop().await?;
 
     // Pop keyboard enhancement flags if we pushed them
-    let supports_keyboard_enhancement = crossterm::terminal::supports_keyboard_enhancement()
-        .unwrap_or(false);
+    let supports_keyboard_enhancement =
+        crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     if supports_keyboard_enhancement {
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }

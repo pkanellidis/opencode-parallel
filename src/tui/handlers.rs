@@ -36,19 +36,19 @@ pub fn handle_paste_event(app: &mut App, text: String) {
 pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> bool {
     match mouse.kind {
         MouseEventKind::ScrollDown => {
-            app.handle_scroll(ScrollDirection::Down);
+            app.handle_scroll_at_position(ScrollDirection::Down, mouse.column, mouse.row);
             false
         }
         MouseEventKind::ScrollUp => {
-            app.handle_scroll(ScrollDirection::Up);
+            app.handle_scroll_at_position(ScrollDirection::Up, mouse.column, mouse.row);
             false
         }
         MouseEventKind::ScrollLeft => {
-            app.handle_scroll(ScrollDirection::Left);
+            app.handle_scroll_at_position(ScrollDirection::Left, mouse.column, mouse.row);
             false
         }
         MouseEventKind::ScrollRight => {
-            app.handle_scroll(ScrollDirection::Right);
+            app.handle_scroll_at_position(ScrollDirection::Right, mouse.column, mouse.row);
             false
         }
         MouseEventKind::Down(MouseButton::Left) => {
@@ -83,12 +83,12 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> bool {
 /// This allows clipboard operations to work over SSH by having
 /// the terminal emulator handle the clipboard locally.
 fn write_osc52(text: &str) {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use std::io::Write;
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    
+
     let base64 = STANDARD.encode(text);
     let osc52 = format!("\x1b]52;c;{}\x07", base64);
-    
+
     // Check if we're in tmux or screen
     let passthrough = std::env::var("TMUX").is_ok() || std::env::var("STY").is_ok();
     let sequence = if passthrough {
@@ -96,7 +96,7 @@ fn write_osc52(text: &str) {
     } else {
         osc52
     };
-    
+
     let _ = std::io::stdout().write_all(sequence.as_bytes());
     let _ = std::io::stdout().flush();
 }
@@ -469,9 +469,10 @@ async fn handle_slash_command(
             session
                 .messages
                 .push(("  /model         - Select model".to_string(), false));
-            session
-                .messages
-                .push(("  /reply #N [msg] - Reply/continue worker".to_string(), false));
+            session.messages.push((
+                "  /reply #N [msg] - Reply/continue worker".to_string(),
+                false,
+            ));
             session
                 .messages
                 .push(("  /stop          - Stop running workers".to_string(), false));
@@ -1033,15 +1034,23 @@ fn handle_stop_selector(app: &mut App, key: KeyEvent) {
 
 fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
     let has_selected_worker = app.current_session().selected_worker.is_some();
+    let in_detail_panel = app.focus_detail_panel && has_selected_worker;
 
     match key.code {
         KeyCode::Char('q') => app.quit = true,
-        KeyCode::Char('i') | KeyCode::Enter => app.input_mode = true,
+        KeyCode::Char('i') | KeyCode::Enter => {
+            if !in_detail_panel {
+                app.input_mode = true;
+            }
+        }
         KeyCode::Char('j') | KeyCode::Down => {
             if app.show_logs {
                 app.logs_scroll_state.scroll_by(1);
+            } else if in_detail_panel {
+                app.worker_detail_scroll.scroll_by(1);
             } else if has_selected_worker {
-                app.current_session_mut().scroll_offset += 1;
+                app.current_session_mut().select_next_worker();
+                app.reset_worker_detail_scroll();
             } else {
                 app.current_session_mut().select_next_worker();
             }
@@ -1049,39 +1058,49 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('k') | KeyCode::Up => {
             if app.show_logs {
                 app.logs_scroll_state.scroll_by(-1);
+            } else if in_detail_panel {
+                app.worker_detail_scroll.scroll_by(-1);
             } else if has_selected_worker {
-                app.current_session_mut().scroll_offset =
-                    app.current_session().scroll_offset.saturating_sub(1);
+                app.current_session_mut().select_prev_worker();
+                app.reset_worker_detail_scroll();
             } else {
                 app.current_session_mut().select_prev_worker();
             }
         }
         KeyCode::Tab => {
             if has_selected_worker {
-                app.current_session_mut().select_next_worker();
-                app.current_session_mut().scroll_offset = 0;
+                app.toggle_panel_focus();
             } else {
                 app.next_session();
             }
         }
         KeyCode::BackTab => {
             if has_selected_worker {
-                app.current_session_mut().select_prev_worker();
-                app.current_session_mut().scroll_offset = 0;
+                app.toggle_panel_focus();
             } else {
                 app.prev_session();
+            }
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            if in_detail_panel {
+                app.focus_detail_panel = false;
+            }
+        }
+        KeyCode::Right => {
+            if has_selected_worker && !app.focus_detail_panel {
+                app.focus_detail_panel = true;
             }
         }
         KeyCode::Char('n') => app.next_session(),
         KeyCode::Char('p') => app.prev_session(),
         KeyCode::Char('d') => {
-            if has_selected_worker {
+            if has_selected_worker && !in_detail_panel {
                 app.confirm_delete = true;
                 app.status = "Delete worker? (y/n)".to_string();
             }
         }
         KeyCode::Char('c') | KeyCode::Char('C') => {
-            if !app.current_session().workers.is_empty() {
+            if !app.current_session().workers.is_empty() && !in_detail_panel {
                 app.confirm_clear_all = true;
                 app.status = format!(
                     "Clear {} workers? (y/n)",
@@ -1092,20 +1111,30 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
         KeyCode::PageDown | KeyCode::Char('J') => {
             if app.show_logs {
                 app.logs_scroll_state.scroll_by(PAGE_SCROLL_LINES as isize);
+            } else if in_detail_panel {
+                app.worker_detail_scroll
+                    .scroll_by(PAGE_SCROLL_LINES as isize);
             } else {
                 app.main_scroll_state.scroll_by(LINE_SCROLL_AMOUNT as isize);
             }
         }
         KeyCode::PageUp | KeyCode::Char('K') => {
             if app.show_logs {
-                app.logs_scroll_state.scroll_by(-(PAGE_SCROLL_LINES as isize));
+                app.logs_scroll_state
+                    .scroll_by(-(PAGE_SCROLL_LINES as isize));
+            } else if in_detail_panel {
+                app.worker_detail_scroll
+                    .scroll_by(-(PAGE_SCROLL_LINES as isize));
             } else {
-                app.main_scroll_state.scroll_by(-(LINE_SCROLL_AMOUNT as isize));
+                app.main_scroll_state
+                    .scroll_by(-(LINE_SCROLL_AMOUNT as isize));
             }
         }
         KeyCode::Home | KeyCode::Char('g') => {
             if app.show_logs {
                 app.logs_scroll_state.scroll_to_top();
+            } else if in_detail_panel {
+                app.worker_detail_scroll.scroll_to_top();
             } else {
                 app.main_scroll_state.scroll_to_top();
             }
@@ -1113,22 +1142,29 @@ fn handle_navigation_mode(app: &mut App, key: KeyEvent) {
         KeyCode::End | KeyCode::Char('G') => {
             if app.show_logs {
                 app.logs_scroll_state.scroll_to_bottom();
+            } else if in_detail_panel {
+                app.worker_detail_scroll.scroll_to_bottom();
             } else {
                 app.main_scroll_state.scroll_to_bottom();
             }
         }
         KeyCode::Char('l') => {
-            app.show_logs = !app.show_logs;
-            if app.show_logs {
-                app.logs_scroll_state.scroll_to_bottom();
+            if !in_detail_panel {
+                app.show_logs = !app.show_logs;
+                if app.show_logs {
+                    app.logs_scroll_state.scroll_to_bottom();
+                }
             }
         }
         KeyCode::Esc => {
             if app.show_logs {
                 app.show_logs = false;
+            } else if in_detail_panel {
+                app.focus_detail_panel = false;
             } else if has_selected_worker {
                 app.current_session_mut().selected_worker = None;
-                app.current_session_mut().scroll_offset = 0;
+                app.focus_detail_panel = false;
+                app.reset_worker_detail_scroll();
             }
         }
         _ => {}
@@ -1640,7 +1676,10 @@ mod tests {
             app.current_session_mut().selected_worker = Some(0);
             app.input_mode = false;
 
-            handle_navigation_mode(&mut app, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
+            handle_navigation_mode(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()),
+            );
 
             assert!(app.confirm_delete);
             assert!(app.status.contains("Delete worker"));
@@ -1656,7 +1695,10 @@ mod tests {
             app.input_mode = false;
             app.confirm_delete = false;
 
-            handle_navigation_mode(&mut app, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
+            handle_navigation_mode(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()),
+            );
 
             assert!(!app.confirm_delete);
         }
