@@ -15,6 +15,22 @@ use super::scroll::ScrollDirection;
 use super::textarea::TextAreaAction;
 use super::worker::{Worker, WorkerState};
 
+/// Handle paste events from bracketed paste mode.
+/// This inserts the pasted text without triggering submission on newlines.
+pub fn handle_paste_event(app: &mut App, text: String) {
+    if app.input_mode {
+        for (i, line) in text.lines().enumerate() {
+            if i > 0 {
+                app.textarea.insert_newline();
+            }
+            app.textarea.insert_str(line);
+        }
+        if text.ends_with('\n') || text.ends_with("\r\n") {
+            app.textarea.insert_newline();
+        }
+    }
+}
+
 /// Handle mouse events for scrolling and text selection.
 /// Returns true if a copy operation was performed.
 pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> bool {

@@ -25,8 +25,9 @@ pub use worker::{Worker, WorkerState};
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind,
-        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -47,7 +48,12 @@ use crate::server::{OpenCodeServer, ServerProcess, StreamEvent};
 pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
 
     // Enable enhanced keyboard protocol for proper Shift+Enter detection
     // This uses the Kitty keyboard protocol which is supported by modern terminals
@@ -123,6 +129,9 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     handlers::handle_key_event(&mut app, key, &server, &tx).await;
                 }
+                Event::Paste(text) => {
+                    handlers::handle_paste_event(&mut app, text);
+                }
                 _ => {}
             }
         }
@@ -149,7 +158,8 @@ pub async fn run_tui(_num_agents: usize, _workdir: &str) -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
