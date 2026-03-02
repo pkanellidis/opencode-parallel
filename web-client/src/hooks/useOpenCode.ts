@@ -8,6 +8,7 @@ import type {
 } from '../types';
 import * as api from '../api/client';
 import { parseSlashCommand, type SlashCommand, COMMAND_SUGGESTIONS } from '../utils/commands';
+import { Orchestrator, type TaskPlan, type OrchestratorLog } from '../services/orchestrator';
 
 interface UseOpenCodeState {
   connected: boolean;
@@ -21,6 +22,7 @@ interface UseOpenCodeState {
   error: string | null;
   showModelSelector: boolean;
   showStopSelector: boolean;
+  orchestratorLogs: OrchestratorLog[];
 }
 
 export interface CommandResult {
@@ -41,12 +43,14 @@ export function useOpenCode() {
     error: null,
     showModelSelector: false,
     showStopSelector: false,
+    orchestratorLogs: [],
   });
 
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const sessionIdMapRef = useRef<Map<string, { uiSessionId: number; workerId: number }>>(
     new Map()
   );
+  const orchestratorRef = useRef<Map<number, Orchestrator>>(new Map());
 
   const updateWorker = useCallback(
     (
@@ -482,6 +486,14 @@ export function useOpenCode() {
     ]
   );
 
+  const addOrchestratorLog = useCallback((message: string) => {
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+    setState((prev) => ({
+      ...prev,
+      orchestratorLogs: [...prev.orchestratorLogs, { timestamp, message }],
+    }));
+  }, []);
+
   const handleInput = useCallback(
     async (input: string) => {
       const cmd = parseSlashCommand(input);
@@ -498,33 +510,110 @@ export function useOpenCode() {
         return;
       }
 
-      const session = await api.createSession(`Task: ${input.slice(0, 50)}`);
-      const workerId = Date.now();
+      addSessionMessage(`> ${input}`, true);
 
-      const worker: Worker = {
-        id: workerId,
-        description: input,
-        sessionId: session.id,
-        state: 'starting',
-        output: [],
-        streamingContent: '',
-        toolHistory: [],
-      };
+      const activeSession = state.sessions.find((s) => s.id === state.activeSessionId);
+      if (!activeSession) return;
 
-      sessionIdMapRef.current.set(session.id, { uiSessionId: state.activeSessionId, workerId });
+      const idOffset = activeSession.workers.length > 0
+        ? Math.max(...activeSession.workers.map((w) => w.id))
+        : 0;
 
-      setState((prev) => ({
-        ...prev,
-        sessions: prev.sessions.map((s) =>
-          s.id === state.activeSessionId ? { ...s, workers: [...s.workers, worker] } : s
-        ),
-      }));
+      let orchestrator = orchestratorRef.current.get(state.activeSessionId);
+      if (!orchestrator) {
+        orchestrator = new Orchestrator();
+        orchestratorRef.current.set(state.activeSessionId, orchestrator);
+      }
+      orchestrator.setModel(state.currentModel);
 
-      await api.sendMessageAsync(session.id, input, state.currentModel || undefined);
+      addOrchestratorLog('Starting orchestrator...');
 
-      updateWorker(state.activeSessionId, workerId, (w) => ({ ...w, state: 'running' }));
+      try {
+        if (activeSession.orchestratorSessionId) {
+          orchestrator.setSessionId(activeSession.orchestratorSessionId);
+        } else {
+          await orchestrator.init();
+          const orchSessionId = orchestrator.getSessionId();
+          if (orchSessionId) {
+            setState((prev) => ({
+              ...prev,
+              sessions: prev.sessions.map((s) =>
+                s.id === state.activeSessionId
+                  ? { ...s, orchestratorSessionId: orchSessionId }
+                  : s
+              ),
+            }));
+          }
+        }
+
+        for (const log of orchestrator.getLogs()) {
+          addOrchestratorLog(log.message);
+        }
+
+        const plan: TaskPlan = await orchestrator.planTasks(input);
+
+        for (const log of orchestrator.getLogs()) {
+          addOrchestratorLog(log.message);
+        }
+
+        addOrchestratorLog(`Task plan: ${plan.tasks.length} task(s) - ${plan.reasoning}`);
+
+        for (const task of plan.tasks) {
+          const workerId = idOffset + task.id;
+          const worker: Worker = {
+            id: workerId,
+            description: task.description,
+            sessionId: undefined,
+            state: 'starting',
+            output: [],
+            streamingContent: '',
+            toolHistory: [],
+          };
+
+          setState((prev) => ({
+            ...prev,
+            sessions: prev.sessions.map((s) =>
+              s.id === state.activeSessionId ? { ...s, workers: [...s.workers, worker] } : s
+            ),
+          }));
+
+          (async () => {
+            try {
+              const session = await api.createSession(`Worker ${workerId}: ${task.description.slice(0, 30)}`);
+
+              sessionIdMapRef.current.set(session.id, {
+                uiSessionId: state.activeSessionId!,
+                workerId,
+              });
+
+              updateWorker(state.activeSessionId!, workerId, (w) => ({
+                ...w,
+                sessionId: session.id,
+              }));
+
+              await api.sendMessageAsync(session.id, task.prompt, state.currentModel || undefined);
+
+              updateWorker(state.activeSessionId!, workerId, (w) => ({
+                ...w,
+                state: 'running',
+              }));
+            } catch (err) {
+              const errorMsg = err instanceof Error ? err.message : String(err);
+              updateWorker(state.activeSessionId!, workerId, (w) => ({
+                ...w,
+                state: 'error',
+                output: [...w.output, `Error: ${errorMsg}`],
+              }));
+            }
+          })();
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        addOrchestratorLog(`Orchestrator error: ${errorMsg}`);
+        addSessionMessage(`Error: ${errorMsg}`, false);
+      }
     },
-    [state.activeSessionId, state.currentModel, addSessionMessage, handleSlashCommand, updateWorker]
+    [state.activeSessionId, state.sessions, state.currentModel, addSessionMessage, handleSlashCommand, updateWorker, addOrchestratorLog]
   );
 
   const answerQuestion = useCallback(
