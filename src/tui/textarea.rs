@@ -183,6 +183,11 @@ impl EnhancedTextArea {
                 self.textarea.delete_word();
                 TextAreaAction::Continue
             }
+            // macOS Option+Backspace often sends DEL (0x7F) with alt modifier
+            KeyCode::Char('\x7f') if alt => {
+                self.textarea.delete_word();
+                TextAreaAction::Continue
+            }
             KeyCode::Delete if ctrl => {
                 self.textarea.delete_next_word();
                 TextAreaAction::Continue

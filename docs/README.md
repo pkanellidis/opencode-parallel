@@ -24,6 +24,13 @@ Complete documentation for opencode-parallel.
   - Basic usage
   - Common tasks
 
+- **[CONTROLS.md](CONTROLS.md)** - Complete keyboard controls reference
+  - Navigation mode shortcuts
+  - Input mode text editing
+  - Word navigation and deletion
+  - Mouse controls
+  - Terminal setup for macOS
+
 - **[NEXT_STEPS.md](NEXT_STEPS.md)** - What to do after setup
   - Immediate actions
   - Learning resources

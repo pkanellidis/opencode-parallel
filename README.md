@@ -72,6 +72,8 @@ opencode-parallel run --config tasks.json --parallel 4
 | `Esc` | Back/exit mode |
 | `q` | Quit |
 
+See [docs/CONTROLS.md](docs/CONTROLS.md) for the complete keyboard controls reference, including input mode text editing, word navigation, and terminal setup.
+
 ## Slash Commands
 
 | Command | Description |
