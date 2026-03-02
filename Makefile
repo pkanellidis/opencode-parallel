@@ -41,6 +41,9 @@ uninstall: ## Uninstall from local system
 run: ## Run the TUI with default settings
 	cargo run
 
+run-web: ## Run the web interface
+	cargo run -- web
+
 run-batch: ## Run batch mode with example config
 	cargo run -- run --config tasks.example.json --parallel 4
 

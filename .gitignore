@@ -19,3 +19,7 @@ Thumbs.db
 *.local.json
 .env
 /config.json
+
+# Node
+node_modules/
+dist/

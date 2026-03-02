@@ -9,6 +9,7 @@ use super::scroll::{ScrollDirection, ScrollState};
 use super::selection::TextSelection;
 use super::session::Session;
 use super::textarea::EnhancedTextArea;
+use ratatui::layout::Rect;
 
 /// Main application state.
 pub struct App {
@@ -70,6 +71,10 @@ pub struct App {
     pub main_scroll_state: ScrollState,
     /// Scroll state for logs panel (with acceleration).
     pub logs_scroll_state: ScrollState,
+    /// Scroll state for worker detail panel.
+    pub worker_detail_scroll: ScrollState,
+    /// Whether the focus is on the worker detail panel (right side).
+    pub focus_detail_panel: bool,
     /// Current text selection (for copy).
     pub selection: Option<TextSelection>,
     /// Content lines for the main view (used for selection/copy).
@@ -78,6 +83,14 @@ pub struct App {
     pub content_area_x: u16,
     /// Currently selected model (provider/model).
     pub current_model: Option<String>,
+    /// Area of the messages panel (panel 2) for position-based scroll routing.
+    pub messages_panel_area: Option<Rect>,
+    /// Area of the worker detail panel (panel 3) for position-based scroll routing.
+    pub detail_panel_area: Option<Rect>,
+    /// Content lines for the detail panel (for selection/copy).
+    pub detail_content_lines: Vec<String>,
+    /// X-offset of the detail panel content area (for mapping selection columns).
+    pub detail_content_area_x: u16,
 }
 
 impl App {
@@ -114,27 +127,71 @@ impl App {
             stop_selector_cursor: 0,
             main_scroll_state: ScrollState::new(),
             logs_scroll_state: ScrollState::new(),
+            worker_detail_scroll: ScrollState::new(),
+            focus_detail_panel: false,
             selection: None,
             content_lines: Vec::new(),
             content_area_x: 0,
             current_model: None,
+            messages_panel_area: None,
+            detail_panel_area: None,
+            detail_content_lines: Vec::new(),
+            detail_content_area_x: 0,
         }
     }
 
-    /// Handle scroll event for the appropriate panel.
+    /// Handle scroll event for the appropriate panel (keyboard-based).
     pub fn handle_scroll(&mut self, direction: ScrollDirection) {
         if self.show_logs {
             self.logs_scroll_state.handle_scroll(direction);
+        } else if self.focus_detail_panel && self.current_session().selected_worker.is_some() {
+            self.worker_detail_scroll.handle_scroll(direction);
         } else {
             self.main_scroll_state.handle_scroll(direction);
         }
+    }
+
+    /// Handle scroll event based on mouse position.
+    pub fn handle_scroll_at_position(&mut self, direction: ScrollDirection, col: u16, row: u16) {
+        if self.show_logs {
+            self.logs_scroll_state.handle_scroll(direction);
+            return;
+        }
+
+        // Check if mouse is over the detail panel (panel 3)
+        if let Some(area) = self.detail_panel_area {
+            if col >= area.x
+                && col < area.x + area.width
+                && row >= area.y
+                && row < area.y + area.height
+            {
+                self.worker_detail_scroll.handle_scroll(direction);
+                return;
+            }
+        }
+
+        // Check if mouse is over the messages panel (panel 2)
+        if let Some(area) = self.messages_panel_area {
+            if col >= area.x
+                && col < area.x + area.width
+                && row >= area.y
+                && row < area.y + area.height
+            {
+                self.main_scroll_state.handle_scroll(direction);
+                return;
+            }
+        }
+
+        // Default: scroll main panel
+        self.main_scroll_state.handle_scroll(direction);
     }
 
     /// Update scroll state (call each frame for momentum scrolling).
     pub fn tick_scroll(&mut self) -> bool {
         let main_changed = self.main_scroll_state.tick();
         let logs_changed = self.logs_scroll_state.tick();
-        main_changed || logs_changed
+        let detail_changed = self.worker_detail_scroll.tick();
+        main_changed || logs_changed || detail_changed
     }
 
     /// Get main scroll offset.
@@ -155,6 +212,28 @@ impl App {
     /// Set logs scroll dimensions.
     pub fn set_logs_scroll_dimensions(&mut self, total: usize, visible: usize) {
         self.logs_scroll_state.set_dimensions(total, visible);
+    }
+
+    /// Get worker detail scroll offset.
+    pub fn worker_detail_scroll(&self) -> usize {
+        self.worker_detail_scroll.offset
+    }
+
+    /// Set worker detail scroll dimensions.
+    pub fn set_worker_detail_scroll_dimensions(&mut self, total: usize, visible: usize) {
+        self.worker_detail_scroll.set_dimensions(total, visible);
+    }
+
+    /// Toggle focus between main content and worker detail panel.
+    pub fn toggle_panel_focus(&mut self) {
+        if self.current_session().selected_worker.is_some() {
+            self.focus_detail_panel = !self.focus_detail_panel;
+        }
+    }
+
+    /// Reset worker detail scroll to top when selecting a different worker.
+    pub fn reset_worker_detail_scroll(&mut self) {
+        self.worker_detail_scroll.scroll_to_top();
     }
 
     /// Returns the current input text (all lines joined).
@@ -222,7 +301,7 @@ impl App {
         }
     }
 
-    /// Gets the selected text from content_lines.
+    /// Gets the selected text from content_lines (messages panel or detail panel).
     pub fn get_selected_text(&self) -> Option<String> {
         let sel = self.selection.as_ref()?;
         if sel.is_empty() {
@@ -230,11 +309,22 @@ impl App {
         }
 
         let (start, end) = sel.normalized();
-        let offset_x = self.content_area_x;
+
+        // Determine which panel the selection is in based on x position
+        let (content_lines, offset_x) = if let Some(area) = self.detail_panel_area {
+            if start.col >= area.x && start.col < area.x + area.width {
+                (&self.detail_content_lines, self.detail_content_area_x)
+            } else {
+                (&self.content_lines, self.content_area_x)
+            }
+        } else {
+            (&self.content_lines, self.content_area_x)
+        };
+
         let mut lines = Vec::new();
 
         for row in start.row..=end.row {
-            if let Some(line) = self.content_lines.get(row as usize) {
+            if let Some(line) = content_lines.get(row as usize) {
                 let chars: Vec<char> = line.chars().collect();
                 let char_len = chars.len() as u16;
                 let col_start = if row == start.row {

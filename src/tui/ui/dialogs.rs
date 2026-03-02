@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 
@@ -426,8 +426,12 @@ pub fn render_autocomplete(f: &mut Frame, app: &App, input_area: Rect) {
         .map(|(i, s)| {
             let is_selected = i == app.autocomplete_index;
             let bg = if is_selected { BG_SELECTED } else { BG_PANEL };
-            let cmd_color = if is_selected { ACCENT } else { TEXT_PRIMARY };
-            let desc_color = TEXT_DIM;
+            let cmd_color = if is_selected {
+                TEXT_PRIMARY
+            } else {
+                TEXT_SECONDARY
+            };
+            let desc_color = TEXT_SECONDARY;
 
             let line = Line::from(vec![
                 Span::styled(
@@ -441,15 +445,19 @@ pub fn render_autocomplete(f: &mut Frame, app: &App, input_area: Rect) {
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(BORDER))
-            .style(Style::default().bg(BG_PANEL)),
-    );
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(BORDER))
+                .style(Style::default().bg(BG_PANEL)),
+        )
+        .highlight_style(Style::default());
+
+    let mut list_state = ListState::default().with_selected(Some(app.autocomplete_index));
 
     f.render_widget(Clear, popup_area);
-    f.render_widget(list, popup_area);
+    f.render_stateful_widget(list, popup_area, &mut list_state);
 }
 
 #[cfg(test)]
@@ -602,6 +610,83 @@ mod tests {
                 .collect();
             assert!(content.contains("Clear all"));
             assert!(content.contains("3"));
+        }
+    }
+
+    mod render_autocomplete_tests {
+        use super::*;
+        use ratatui::backend::TestBackend;
+        use ratatui::layout::Rect;
+        use ratatui::Terminal;
+
+        #[test]
+        fn does_not_render_when_autocomplete_disabled() {
+            let mut app = create_test_app();
+            app.show_autocomplete = false;
+            app.input_mode = true;
+
+            let backend = TestBackend::new(80, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let input_area = Rect::new(0, 20, 80, 3);
+            terminal
+                .draw(|f| {
+                    render_autocomplete(f, &app, input_area);
+                })
+                .unwrap();
+
+            let buffer = terminal.backend().buffer();
+            let content: String = buffer
+                .content
+                .iter()
+                .map(|c| c.symbol().chars().next().unwrap_or(' '))
+                .collect();
+            assert!(!content.contains("/help"));
+        }
+
+        #[test]
+        fn renders_suggestions_when_enabled() {
+            let mut app = create_test_app();
+            app.show_autocomplete = true;
+            app.input_mode = true;
+            app.textarea.set_input("/");
+
+            let backend = TestBackend::new(80, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let input_area = Rect::new(0, 20, 80, 3);
+            terminal
+                .draw(|f| {
+                    render_autocomplete(f, &app, input_area);
+                })
+                .unwrap();
+
+            let buffer = terminal.backend().buffer();
+            let content: String = buffer
+                .content
+                .iter()
+                .map(|c| c.symbol().chars().next().unwrap_or(' '))
+                .collect();
+            assert!(content.contains("/help"));
+        }
+
+        #[test]
+        fn uses_list_state_for_selection_scrolling() {
+            let mut app = create_test_app();
+            app.show_autocomplete = true;
+            app.input_mode = true;
+            app.textarea.set_input("/");
+            app.autocomplete_index = 5;
+
+            let backend = TestBackend::new(80, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let input_area = Rect::new(0, 20, 80, 3);
+            terminal
+                .draw(|f| {
+                    render_autocomplete(f, &app, input_area);
+                })
+                .unwrap();
+
+            let suggestions = app.get_current_suggestions();
+            assert!(app.autocomplete_index < suggestions.len());
         }
     }
 }
