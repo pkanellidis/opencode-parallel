@@ -615,4 +615,40 @@ mod tests {
         app.logs_scroll_state.scroll_by(3);
         assert_eq!(app.logs_scroll(), 8);
     }
+
+    #[test]
+    fn confirm_delete_shows_in_has_dialog_open() {
+        let mut app = create_test_app();
+        assert!(!app.has_dialog_open());
+
+        app.confirm_delete = true;
+        assert!(app.has_dialog_open());
+
+        app.confirm_delete = false;
+        assert!(!app.has_dialog_open());
+    }
+
+    #[test]
+    fn confirm_clear_all_shows_in_has_dialog_open() {
+        let mut app = create_test_app();
+        assert!(!app.has_dialog_open());
+
+        app.confirm_clear_all = true;
+        assert!(app.has_dialog_open());
+
+        app.confirm_clear_all = false;
+        assert!(!app.has_dialog_open());
+    }
+
+    #[test]
+    fn confirm_delete_session_shows_in_has_dialog_open() {
+        let mut app = create_test_app();
+        assert!(!app.has_dialog_open());
+
+        app.confirm_delete_session = true;
+        assert!(app.has_dialog_open());
+
+        app.confirm_delete_session = false;
+        assert!(!app.has_dialog_open());
+    }
 }

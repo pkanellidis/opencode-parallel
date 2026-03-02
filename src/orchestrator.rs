@@ -18,7 +18,7 @@ Rules:
 - If the task is simple and doesn't benefit from parallelization, return a single task with the EXACT user request as the prompt
 - If the task can be split into independent subtasks, create multiple tasks
 - Each task should be self-contained and not depend on other tasks' outputs
-- Maximum 8 tasks
+- Use as many tasks as needed to fully parallelize the work
 - Keep descriptions under 50 characters
 - IMPORTANT: The "prompt" field should contain the user's original request or a subset of it verbatim. Do NOT rewrite, rephrase, or add instructions. Do NOT add any information about yourself or any AI model.
 

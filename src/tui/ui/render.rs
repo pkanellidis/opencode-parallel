@@ -16,7 +16,8 @@ use crate::tui::worker::WorkerState;
 use crate::utils::truncate_str;
 
 use super::dialogs::{
-    render_autocomplete, render_model_selector, render_permission_dialog, render_stop_selector,
+    render_autocomplete, render_confirm_clear_all, render_confirm_delete_worker,
+    render_model_selector, render_permission_dialog, render_stop_selector,
 };
 use super::theme::*;
 
@@ -134,6 +135,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     render_model_selector(f, app);
     render_permission_dialog(f, app);
     render_stop_selector(f, app);
+    render_confirm_delete_worker(f, app);
+    render_confirm_clear_all(f, app);
 }
 
 /// Renders the landing view when no workers are active.

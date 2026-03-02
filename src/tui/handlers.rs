@@ -1423,3 +1423,226 @@ async fn handle_report_to_orchestrator(
         app.status = "All workers complete".to_string();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::OpenCodeServer;
+
+    fn create_test_app() -> App {
+        let server = OpenCodeServer::new(4096);
+        App::new(server)
+    }
+
+    mod handle_confirm_delete_tests {
+        use super::*;
+
+        #[test]
+        fn pressing_y_deletes_selected_worker() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Test Worker".to_string()));
+            app.current_session_mut().selected_worker = Some(0);
+            app.confirm_delete = true;
+
+            let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty());
+            handle_confirm_delete(&mut app, key);
+
+            assert!(!app.confirm_delete);
+            assert!(app.current_session().workers.is_empty());
+            assert_eq!(app.status, "Deleted");
+        }
+
+        #[test]
+        fn pressing_capital_y_deletes_selected_worker() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Test Worker".to_string()));
+            app.current_session_mut().selected_worker = Some(0);
+            app.confirm_delete = true;
+
+            let key = KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::empty());
+            handle_confirm_delete(&mut app, key);
+
+            assert!(!app.confirm_delete);
+            assert!(app.current_session().workers.is_empty());
+        }
+
+        #[test]
+        fn pressing_n_cancels_deletion() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Test Worker".to_string()));
+            app.current_session_mut().selected_worker = Some(0);
+            app.confirm_delete = true;
+
+            let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty());
+            handle_confirm_delete(&mut app, key);
+
+            assert!(!app.confirm_delete);
+            assert_eq!(app.current_session().workers.len(), 1);
+            assert_eq!(app.status, "Cancelled");
+        }
+
+        #[test]
+        fn pressing_esc_cancels_deletion() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Test Worker".to_string()));
+            app.current_session_mut().selected_worker = Some(0);
+            app.confirm_delete = true;
+
+            let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+            handle_confirm_delete(&mut app, key);
+
+            assert!(!app.confirm_delete);
+            assert_eq!(app.current_session().workers.len(), 1);
+            assert_eq!(app.status, "Cancelled");
+        }
+
+        #[test]
+        fn deleting_adjusts_selection_when_at_end() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Worker 1".to_string()));
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(2, "Worker 2".to_string()));
+            app.current_session_mut().selected_worker = Some(1);
+            app.confirm_delete = true;
+
+            let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty());
+            handle_confirm_delete(&mut app, key);
+
+            assert_eq!(app.current_session().workers.len(), 1);
+            assert_eq!(app.current_session().selected_worker, Some(0));
+        }
+
+        #[test]
+        fn deleting_last_worker_clears_selection() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Only Worker".to_string()));
+            app.current_session_mut().selected_worker = Some(0);
+            app.confirm_delete = true;
+
+            let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty());
+            handle_confirm_delete(&mut app, key);
+
+            assert!(app.current_session().workers.is_empty());
+            assert_eq!(app.current_session().selected_worker, None);
+        }
+
+        #[test]
+        fn other_keys_do_nothing() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Test Worker".to_string()));
+            app.current_session_mut().selected_worker = Some(0);
+            app.confirm_delete = true;
+
+            let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty());
+            handle_confirm_delete(&mut app, key);
+
+            assert!(app.confirm_delete);
+            assert_eq!(app.current_session().workers.len(), 1);
+        }
+    }
+
+    mod handle_confirm_clear_all_tests {
+        use super::*;
+
+        #[test]
+        fn pressing_y_clears_all_workers() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Worker 1".to_string()));
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(2, "Worker 2".to_string()));
+            app.current_session_mut().selected_worker = Some(0);
+            app.confirm_clear_all = true;
+
+            let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty());
+            handle_confirm_clear_all(&mut app, key);
+
+            assert!(!app.confirm_clear_all);
+            assert!(app.current_session().workers.is_empty());
+            assert_eq!(app.current_session().selected_worker, None);
+            assert_eq!(app.status, "Cleared");
+        }
+
+        #[test]
+        fn pressing_n_cancels_clear() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Worker 1".to_string()));
+            app.confirm_clear_all = true;
+
+            let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty());
+            handle_confirm_clear_all(&mut app, key);
+
+            assert!(!app.confirm_clear_all);
+            assert_eq!(app.current_session().workers.len(), 1);
+            assert_eq!(app.status, "Cancelled");
+        }
+
+        #[test]
+        fn pressing_esc_cancels_clear() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Worker 1".to_string()));
+            app.confirm_clear_all = true;
+
+            let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+            handle_confirm_clear_all(&mut app, key);
+
+            assert!(!app.confirm_clear_all);
+            assert_eq!(app.current_session().workers.len(), 1);
+        }
+    }
+
+    mod navigation_mode_d_key_tests {
+        use super::*;
+
+        #[test]
+        fn d_key_sets_confirm_delete_when_worker_selected() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Test Worker".to_string()));
+            app.current_session_mut().selected_worker = Some(0);
+            app.input_mode = false;
+
+            handle_navigation_mode(&mut app, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
+
+            assert!(app.confirm_delete);
+            assert!(app.status.contains("Delete worker"));
+        }
+
+        #[test]
+        fn d_key_does_nothing_when_no_worker_selected() {
+            let mut app = create_test_app();
+            app.current_session_mut()
+                .workers
+                .push(Worker::new(1, "Test Worker".to_string()));
+            app.current_session_mut().selected_worker = None;
+            app.input_mode = false;
+            app.confirm_delete = false;
+
+            handle_navigation_mode(&mut app, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
+
+            assert!(!app.confirm_delete);
+        }
+    }
+}
