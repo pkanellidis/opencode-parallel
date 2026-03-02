@@ -58,6 +58,8 @@ pub enum AppMessage {
     ServerLogs(Vec<String>),
     /// Task plan received from orchestrator. Fields: session_id, plan, logs, orch_session_id, id_offset.
     TaskPlan(usize, TaskPlan, Vec<String>, String, u32),
+    /// Follow-up task plan from orchestrator analysis. Fields: session_id, plan, logs, id_offset.
+    FollowUpPlan(usize, TaskPlan, Vec<String>, u32),
     /// A worker has started.
     WorkerStarted(usize, u32, String),
     /// Worker produced output.
@@ -74,8 +76,8 @@ pub enum AppMessage {
     Error(String),
     /// Models loaded for selector.
     ModelsLoaded(Vec<ModelOption>),
-    /// Report worker results to orchestrator.
-    ReportToOrchestrator(usize, String),
+    /// Report worker results to orchestrator and analyze for follow-ups.
+    AnalyzeWorkerResults(usize, String, Vec<crate::orchestrator::WorkerResult>),
     /// Current model info loaded.
     CurrentModelLoaded(Option<String>),
 }

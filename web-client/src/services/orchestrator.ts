@@ -1,5 +1,45 @@
 import * as api from '../api/client';
 
+const ORCHESTRATOR_ANALYZE_PROMPT = `You are an AI task orchestrator. You have dispatched workers to complete tasks, and now you have received their results.
+
+Analyze the worker results and decide if any follow-up tasks are needed.
+
+Respond ONLY with a JSON object in this exact format (no markdown, no code blocks, just raw JSON):
+{
+  "tasks": [
+    {"id": 1, "description": "Brief task description", "prompt": "Detailed prompt for the follow-up task"}
+  ],
+  "reasoning": "Explanation of why these follow-up tasks are needed, or why no follow-up is needed",
+  "complete": true/false
+}
+
+Rules:
+- Set "complete" to true if the original user request has been fully addressed and no follow-up is needed
+- Set "complete" to false if follow-up tasks are required
+- If complete is true, return an empty tasks array
+- Follow-up tasks should address:
+  - Errors or failures in worker results that need to be fixed
+  - Integration work needed after parallel tasks complete (e.g., combining components)
+  - Additional steps discovered during task execution
+  - Quality improvements or refinements needed
+- Keep task descriptions under 50 characters
+- Each follow-up task should be self-contained
+- Do NOT create follow-up tasks for work that was already completed successfully
+- Do NOT create unnecessary follow-up tasks - only create them when genuinely needed
+
+Examples of when to create follow-up tasks:
+- A worker reported an error that needs fixing
+- Multiple workers created separate components that need integration
+- A worker discovered additional requirements during execution
+- Tests failed and fixes are needed
+
+Examples of when NOT to create follow-up tasks (set complete: true):
+- All workers completed successfully with no issues
+- The task was informational (explanation, documentation)
+- No errors or integration needs were identified
+
+IMPORTANT: Respond ONLY with valid JSON, no other text, no markdown code blocks.`;
+
 const ORCHESTRATOR_SYSTEM_PROMPT = `You are an AI task orchestrator. Your job is to analyze user requests and decide how to split them into parallel tasks.
 
 When the user sends a request, respond ONLY with a JSON object in this exact format (no markdown, no code blocks, just raw JSON):
@@ -38,6 +78,14 @@ export interface Task {
 export interface TaskPlan {
   tasks: Task[];
   reasoning: string;
+  complete?: boolean;
+}
+
+export interface WorkerResult {
+  workerId: number;
+  description: string;
+  success: boolean;
+  output: string;
 }
 
 export interface OrchestratorLog {
@@ -116,15 +164,81 @@ export class Orchestrator {
     return this.parseTaskPlan(fullText, userMessage);
   }
 
-  async reportWorkerResults(results: string): Promise<void> {
+  async analyzeResults(originalRequest: string, workerResults: WorkerResult[]): Promise<TaskPlan> {
+    this.log('Analyzing worker results for follow-up tasks...');
+
     if (!this.sessionId) {
       throw new Error('Orchestrator not initialized');
     }
 
-    this.log('Reporting worker results to orchestrator...');
-    const report = `WORKER RESULTS (for context in future requests):\n${results}`;
-    await api.sendMessage(this.sessionId, report, this.model || undefined);
-    this.log('Worker results reported successfully');
+    const resultsSummary = workerResults
+      .map((r) => `Worker #${r.workerId} (${r.description}): ${r.success ? 'SUCCESS' : 'FAILED'}\nOutput:\n${truncateStr(r.output, 500)}`)
+      .join('\n\n---\n\n');
+
+    const prompt = `${ORCHESTRATOR_ANALYZE_PROMPT}\n\nOriginal user request: ${originalRequest}\n\nWorker results:\n${resultsSummary}`;
+
+    this.log('Sending analysis request to orchestrator AI...');
+    if (this.model) {
+      this.log(`Using model: ${this.model}`);
+    }
+
+    const response = await api.sendMessage(this.sessionId, prompt, this.model || undefined);
+
+    let fullText = '';
+    for (const part of response.parts) {
+      if (part.text) {
+        fullText += part.text;
+      }
+    }
+
+    this.log(`Received analysis response (${fullText.length} chars)`);
+    this.log(`Raw response: ${truncateStr(fullText, 200)}`);
+
+    return this.parseAnalysisResponse(fullText);
+  }
+
+  private parseAnalysisResponse(response: string): TaskPlan {
+    const cleaned = response.trim();
+
+    this.log('Attempt 1: Direct JSON parse');
+    try {
+      const plan = JSON.parse(cleaned) as TaskPlan;
+      this.log('Success: Direct parse worked');
+      return plan;
+    } catch {
+      // Continue to next attempt
+    }
+
+    this.log('Attempt 2: Extract from markdown code blocks');
+    const markdownJson = this.extractJsonFromMarkdown(cleaned);
+    if (markdownJson) {
+      try {
+        const plan = JSON.parse(markdownJson) as TaskPlan;
+        this.log('Success: Extracted from markdown');
+        return plan;
+      } catch {
+        // Continue to next attempt
+      }
+    }
+
+    this.log('Attempt 3: Brace-matching JSON extraction');
+    const bracedJson = this.extractJsonObject(cleaned);
+    if (bracedJson) {
+      try {
+        const plan = JSON.parse(bracedJson) as TaskPlan;
+        this.log('Success: Brace-matched extraction worked');
+        return plan;
+      } catch {
+        // Continue to next attempt
+      }
+    }
+
+    this.log('Could not parse analysis response, assuming complete');
+    return {
+      tasks: [],
+      reasoning: 'Could not parse analysis response, assuming complete',
+      complete: true,
+    };
   }
 
   private parseTaskPlan(response: string, originalMessage: string): TaskPlan {

@@ -148,4 +148,5 @@ export interface UISession {
   messages: Array<{ content: string; isUser: boolean }>;
   workers: Worker[];
   orchestratorSessionId?: string;
+  originalRequest?: string;
 }

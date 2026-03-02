@@ -23,3 +23,5 @@ Thumbs.db
 # Node
 node_modules/
 dist/
+/web-client/.vite/deps/_metadata.json
+/web-client/.vite/deps/package.json

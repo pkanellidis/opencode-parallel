@@ -203,8 +203,19 @@ pub async fn handle_app_message(
                 app.status = "Select a model".to_string();
             }
         }
-        AppMessage::ReportToOrchestrator(ui_session_id, results) => {
-            handle_report_to_orchestrator(app, ui_session_id, results, server, tx).await;
+        AppMessage::AnalyzeWorkerResults(ui_session_id, original_request, worker_results) => {
+            handle_analyze_worker_results(
+                app,
+                ui_session_id,
+                original_request,
+                worker_results,
+                server,
+                tx,
+            )
+            .await;
+        }
+        AppMessage::FollowUpPlan(session_id, plan, logs, id_offset) => {
+            handle_follow_up_plan(app, session_id, plan, logs, id_offset, server, tx).await;
         }
         AppMessage::CurrentModelLoaded(model) => {
             app.set_current_model(model);
@@ -302,6 +313,8 @@ async fn handle_submit_input(
         app.current_session_mut()
             .messages
             .push((format!("> {}", message), true));
+        // Store the original request for orchestrator analysis
+        app.current_session_mut().original_request = Some(message.clone());
         app.status = "Orchestrator analyzing...".to_string();
 
         let server_clone = server.clone();
@@ -1309,7 +1322,8 @@ async fn handle_stream_event(
             }
         }
         StreamEvent::SessionIdle { session_id } => {
-            let mut report_data: Option<(usize, String)> = None;
+            let mut analyze_data: Option<(usize, String, Vec<crate::orchestrator::WorkerResult>)> =
+                None;
 
             if let Some(session) = app.find_session_by_worker_session_id(&session_id) {
                 if let Some(worker) = session
@@ -1341,21 +1355,31 @@ async fn handle_stream_event(
 
                 let all_done = session.workers.iter().all(|w| w.state.is_terminal());
                 if all_done && !session.workers.is_empty() {
-                    let summaries: Vec<String> = session
+                    let worker_results: Vec<crate::orchestrator::WorkerResult> = session
                         .workers
                         .iter()
-                        .map(|w| format!("#{}: {}", w.id, w.get_summary()))
+                        .map(|w| crate::orchestrator::WorkerResult {
+                            worker_id: w.id,
+                            description: w.description.clone(),
+                            success: w.state == WorkerState::Complete,
+                            output: w.get_summary(),
+                        })
                         .collect();
-                    report_data = Some((session.id, summaries.join("\n\n")));
+                    let original_request = session.original_request.clone().unwrap_or_default();
+                    analyze_data = Some((session.id, original_request, worker_results));
                 }
             }
 
-            if let Some((ui_session_id, results)) = report_data {
-                app.status = "Reporting to orchestrator...".to_string();
+            if let Some((ui_session_id, original_request, worker_results)) = analyze_data {
+                app.status = "Analyzing worker results...".to_string();
                 let tx_clone = tx.clone();
                 tokio::spawn(async move {
                     let _ = tx_clone
-                        .send(AppMessage::ReportToOrchestrator(ui_session_id, results))
+                        .send(AppMessage::AnalyzeWorkerResults(
+                            ui_session_id,
+                            original_request,
+                            worker_results,
+                        ))
                         .await;
                 });
             }
@@ -1438,10 +1462,11 @@ async fn handle_stream_event(
     }
 }
 
-async fn handle_report_to_orchestrator(
+async fn handle_analyze_worker_results(
     app: &mut App,
     ui_session_id: usize,
-    results: String,
+    original_request: String,
+    worker_results: Vec<crate::orchestrator::WorkerResult>,
     server: &OpenCodeServer,
     tx: &Sender<AppMessage>,
 ) {
@@ -1450,20 +1475,35 @@ async fn handle_report_to_orchestrator(
             let server_clone = server.clone();
             let orch_session_id = orch_session_id.clone();
             let tx_clone = tx.clone();
+            let current_model = app.current_model.clone();
+            let id_offset = session.workers.iter().map(|w| w.id).max().unwrap_or(0);
+
+            app.orchestrator_logs
+                .push("Analyzing worker results for follow-up tasks...".to_string());
 
             tokio::spawn(async move {
                 let mut orch = Orchestrator::new(server_clone);
+                orch.set_model(current_model);
                 orch.set_session_id(orch_session_id);
 
-                match orch.report_worker_results(&results).await {
-                    Ok(()) => {
+                match orch
+                    .analyze_results(&original_request, &worker_results)
+                    .await
+                {
+                    Ok(plan) => {
+                        let logs = orch.get_logs().to_vec();
                         let _ = tx_clone
-                            .send(AppMessage::CommandResult("Results reported".to_string()))
+                            .send(AppMessage::FollowUpPlan(
+                                ui_session_id,
+                                plan,
+                                logs,
+                                id_offset,
+                            ))
                             .await;
                     }
                     Err(e) => {
                         let _ = tx_clone
-                            .send(AppMessage::CommandResult(format!("Report failed: {}", e)))
+                            .send(AppMessage::Error(format!("Analysis failed: {}", e)))
                             .await;
                     }
                 }
@@ -1473,6 +1513,125 @@ async fn handle_report_to_orchestrator(
         }
     } else {
         app.status = "All workers complete".to_string();
+    }
+}
+
+async fn handle_follow_up_plan(
+    app: &mut App,
+    session_id: usize,
+    plan: crate::orchestrator::TaskPlan,
+    logs: Vec<String>,
+    id_offset: u32,
+    server: &OpenCodeServer,
+    tx: &Sender<AppMessage>,
+) {
+    app.orchestrator_logs.extend(logs);
+
+    if plan.complete || plan.tasks.is_empty() {
+        app.orchestrator_logs
+            .push(format!("Orchestrator: Task complete. {}", plan.reasoning));
+        if let Some(session) = app.find_session_mut(session_id) {
+            session
+                .messages
+                .push((format!("Orchestrator: {}", plan.reasoning), false));
+        }
+        app.status = "All tasks complete".to_string();
+        return;
+    }
+
+    app.orchestrator_logs.push(format!(
+        "Orchestrator: {} follow-up task(s) needed - {}",
+        plan.tasks.len(),
+        plan.reasoning
+    ));
+
+    if let Some(session) = app.find_session_mut(session_id) {
+        session
+            .messages
+            .push((format!("Follow-up: {}", plan.reasoning), false));
+        session.messages.push((
+            format!("Spawning {} follow-up worker(s)...", plan.tasks.len()),
+            false,
+        ));
+
+        for task in &plan.tasks {
+            let new_id = id_offset + task.id;
+            session
+                .messages
+                .push((format!("  #{}: {}", new_id, task.description), false));
+            session
+                .workers
+                .push(Worker::new(new_id, task.description.clone()));
+        }
+    }
+
+    app.status = format!("Running {} follow-up workers", plan.tasks.len());
+
+    let current_model = app.current_model.clone();
+
+    for task in plan.tasks {
+        let server = server.clone();
+        let tx = tx.clone();
+        let task_id = id_offset + task.id;
+        let prompt = task.prompt.clone();
+        let model = current_model.clone();
+
+        tokio::spawn(async move {
+            let _ = tx
+                .send(AppMessage::WorkerOutput(
+                    session_id,
+                    task_id,
+                    "Creating session...".to_string(),
+                ))
+                .await;
+
+            match server
+                .create_session(Some(&format!("Worker {}", task_id)))
+                .await
+            {
+                Ok(session) => {
+                    let _ = tx
+                        .send(AppMessage::WorkerStarted(
+                            session_id,
+                            task_id,
+                            session.id.clone(),
+                        ))
+                        .await;
+                    let _ = tx
+                        .send(AppMessage::WorkerOutput(
+                            session_id,
+                            task_id,
+                            format!(
+                                "Sending to model: {}...",
+                                model.as_deref().unwrap_or("default")
+                            ),
+                        ))
+                        .await;
+
+                    if let Err(e) = server
+                        .send_message_async_with_model(&session.id, &prompt, model.as_deref())
+                        .await
+                    {
+                        let _ = tx
+                            .send(AppMessage::WorkerError(
+                                session_id,
+                                task_id,
+                                format!("Send failed: {}", e),
+                            ))
+                            .await;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(AppMessage::WorkerError(
+                            session_id,
+                            task_id,
+                            format!("Create session failed: {}", e),
+                        ))
+                        .await;
+                }
+            }
+        });
     }
 }
 

@@ -20,6 +20,8 @@ pub struct Session {
     pub scroll_offset: usize,
     /// OpenCode orchestrator session ID.
     pub orchestrator_session_id: Option<String>,
+    /// The original user request (for orchestrator analysis).
+    pub original_request: Option<String>,
 }
 
 impl Session {
@@ -38,6 +40,7 @@ impl Session {
             selected_worker: None,
             scroll_offset: 0,
             orchestrator_session_id: None,
+            original_request: None,
         }
     }
 

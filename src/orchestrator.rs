@@ -33,11 +33,53 @@ Examples of single task (use EXACT user prompt):
 
 IMPORTANT: Respond ONLY with valid JSON, no other text, no markdown code blocks."#;
 
+const ORCHESTRATOR_ANALYZE_PROMPT: &str = r#"You are an AI task orchestrator. You have dispatched workers to complete tasks, and now you have received their results.
+
+Analyze the worker results and decide if any follow-up tasks are needed.
+
+Respond ONLY with a JSON object in this exact format (no markdown, no code blocks, just raw JSON):
+{
+  "tasks": [
+    {"id": 1, "description": "Brief task description", "prompt": "Detailed prompt for the follow-up task"}
+  ],
+  "reasoning": "Explanation of why these follow-up tasks are needed, or why no follow-up is needed",
+  "complete": true/false
+}
+
+Rules:
+- Set "complete" to true if the original user request has been fully addressed and no follow-up is needed
+- Set "complete" to false if follow-up tasks are required
+- If complete is true, return an empty tasks array
+- Follow-up tasks should address:
+  - Errors or failures in worker results that need to be fixed
+  - Integration work needed after parallel tasks complete (e.g., combining components)
+  - Additional steps discovered during task execution
+  - Quality improvements or refinements needed
+- Keep task descriptions under 50 characters
+- Each follow-up task should be self-contained
+- Do NOT create follow-up tasks for work that was already completed successfully
+- Do NOT create unnecessary follow-up tasks - only create them when genuinely needed
+
+Examples of when to create follow-up tasks:
+- A worker reported an error that needs fixing
+- Multiple workers created separate components that need integration
+- A worker discovered additional requirements during execution
+- Tests failed and fixes are needed
+
+Examples of when NOT to create follow-up tasks (set complete: true):
+- All workers completed successfully with no issues
+- The task was informational (explanation, documentation)
+- No errors or integration needs were identified
+
+IMPORTANT: Respond ONLY with valid JSON, no other text, no markdown code blocks."#;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskPlan {
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub reasoning: String,
+    #[serde(default)]
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +87,14 @@ pub struct Task {
     pub id: u32,
     pub description: String,
     pub prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerResult {
+    pub worker_id: u32,
+    pub description: String,
+    pub success: bool,
+    pub output: String,
 }
 
 pub struct Orchestrator {
@@ -123,6 +173,118 @@ impl Orchestrator {
         let _ = self.server.send_message(&session_id, &report).await?;
         self.log("Worker results reported successfully".to_string());
         Ok(())
+    }
+
+    pub async fn analyze_results(
+        &mut self,
+        original_request: &str,
+        worker_results: &[WorkerResult],
+    ) -> Result<TaskPlan> {
+        self.log("Analyzing worker results for follow-up tasks...".to_string());
+
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Orchestrator not initialized"))?;
+
+        let results_summary: String = worker_results
+            .iter()
+            .map(|r| {
+                format!(
+                    "Worker #{} ({}): {}\nOutput:\n{}",
+                    r.worker_id,
+                    r.description,
+                    if r.success { "SUCCESS" } else { "FAILED" },
+                    truncate_str(&r.output, 500)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+
+        let prompt = format!(
+            "{}\n\nOriginal user request: {}\n\nWorker results:\n{}",
+            ORCHESTRATOR_ANALYZE_PROMPT, original_request, results_summary
+        );
+
+        self.log("Sending analysis request to orchestrator AI...".to_string());
+        if let Some(ref m) = self.model {
+            self.log(format!("Using model: {}", m));
+        }
+
+        let response = self
+            .server
+            .send_message_with_model(&session_id, &prompt, self.model.as_deref())
+            .await?;
+
+        let mut full_text = String::new();
+        for part in response.parts {
+            if let Some(text) = part.text {
+                full_text.push_str(&text);
+            }
+        }
+
+        self.log(format!(
+            "Received analysis response ({} chars)",
+            full_text.len()
+        ));
+        self.log(format!("Raw response: {}", truncate_str(&full_text, 200)));
+
+        match self.parse_analysis_response(&full_text) {
+            Ok(plan) => {
+                self.log(format!(
+                    "Analysis complete: {} follow-up task(s), complete={}",
+                    plan.tasks.len(),
+                    plan.complete
+                ));
+                for task in &plan.tasks {
+                    self.log(format!("  Follow-up #{}: {}", task.id, task.description));
+                }
+                Ok(plan)
+            }
+            Err(e) => {
+                self.log(format!("Parse error: {}", e));
+                Ok(TaskPlan {
+                    tasks: vec![],
+                    reasoning: "Could not parse analysis response, assuming complete".to_string(),
+                    complete: true,
+                })
+            }
+        }
+    }
+
+    fn parse_analysis_response(&mut self, response: &str) -> Result<TaskPlan, String> {
+        let cleaned = response.trim();
+
+        self.log("Attempt 1: Direct JSON parse".to_string());
+        if let Ok(plan) = serde_json::from_str::<TaskPlan>(cleaned) {
+            self.log("Success: Direct parse worked".to_string());
+            return Ok(plan);
+        }
+
+        self.log("Attempt 2: Extract from markdown code blocks".to_string());
+        if let Some(json_str) = self.extract_json_from_markdown(cleaned) {
+            if let Ok(plan) = serde_json::from_str::<TaskPlan>(&json_str) {
+                self.log("Success: Extracted from markdown".to_string());
+                return Ok(plan);
+            }
+        }
+
+        self.log("Attempt 3: Brace-matching JSON extraction".to_string());
+        if let Some(json_str) = self.extract_json_object(cleaned) {
+            self.log(format!(
+                "Found JSON object: {}",
+                truncate_str(&json_str, 100)
+            ));
+            if let Ok(plan) = serde_json::from_str::<TaskPlan>(&json_str) {
+                self.log("Success: Brace-matched extraction worked".to_string());
+                return Ok(plan);
+            }
+        }
+
+        Err(format!(
+            "Could not parse analysis response: {}",
+            truncate_str(cleaned, 100)
+        ))
     }
 
     pub async fn plan_tasks(&mut self, user_message: &str) -> Result<TaskPlan> {
@@ -221,6 +383,7 @@ impl Orchestrator {
             return Ok(TaskPlan {
                 tasks,
                 reasoning: "Extracted from partial response".to_string(),
+                complete: false,
             });
         }
 
@@ -239,6 +402,7 @@ impl Orchestrator {
             }],
             reasoning: format!("Fallback: Could not parse orchestrator response. Executing as single task. Raw response: {}", 
                 truncate_str(cleaned, 100)),
+            complete: false,
         })
     }
 
@@ -374,5 +538,76 @@ That's it!"#;
         let plan = result.unwrap();
         assert_eq!(plan.tasks.len(), 1);
         assert_eq!(plan.tasks[0].prompt, "original task");
+    }
+
+    #[test]
+    fn test_parse_analysis_complete() {
+        let mut orch = create_test_orchestrator();
+        let input =
+            r#"{"tasks": [], "reasoning": "All tasks completed successfully", "complete": true}"#;
+        let result = orch.parse_analysis_response(input);
+        assert!(result.is_ok());
+        let plan = result.unwrap();
+        assert!(plan.tasks.is_empty());
+        assert!(plan.complete);
+    }
+
+    #[test]
+    fn test_parse_analysis_with_followup_tasks() {
+        let mut orch = create_test_orchestrator();
+        let input = r#"{"tasks": [{"id": 1, "description": "Fix error", "prompt": "Fix the compilation error"}], "reasoning": "Worker 1 failed", "complete": false}"#;
+        let result = orch.parse_analysis_response(input);
+        assert!(result.is_ok());
+        let plan = result.unwrap();
+        assert_eq!(plan.tasks.len(), 1);
+        assert!(!plan.complete);
+        assert_eq!(plan.tasks[0].description, "Fix error");
+    }
+
+    #[test]
+    fn test_parse_analysis_markdown_wrapped() {
+        let mut orch = create_test_orchestrator();
+        let input = r#"Here's my analysis:
+```json
+{"tasks": [], "reasoning": "Done", "complete": true}
+```
+"#;
+        let result = orch.parse_analysis_response(input);
+        assert!(result.is_ok());
+        let plan = result.unwrap();
+        assert!(plan.complete);
+    }
+
+    #[test]
+    fn test_parse_analysis_fallback() {
+        let mut orch = create_test_orchestrator();
+        let input = "I'm not sure what to do next.";
+        let result = orch.parse_analysis_response(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_worker_result_serialization() {
+        let result = WorkerResult {
+            worker_id: 1,
+            description: "Test task".to_string(),
+            success: true,
+            output: "Task completed".to_string(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("worker_id"));
+        assert!(json.contains("success"));
+    }
+
+    #[test]
+    fn test_task_plan_with_complete_field() {
+        let plan = TaskPlan {
+            tasks: vec![],
+            reasoning: "Done".to_string(),
+            complete: true,
+        };
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(json.contains("complete"));
+        assert!(json.contains("true"));
     }
 }

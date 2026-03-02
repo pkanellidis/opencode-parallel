@@ -8,7 +8,7 @@ import type {
 } from '../types';
 import * as api from '../api/client';
 import { parseSlashCommand, type SlashCommand, COMMAND_SUGGESTIONS } from '../utils/commands';
-import { Orchestrator, type TaskPlan, type OrchestratorLog } from '../services/orchestrator';
+import { Orchestrator, type TaskPlan, type OrchestratorLog, type WorkerResult } from '../services/orchestrator';
 
 interface UseOpenCodeState {
   connected: boolean;
@@ -51,6 +51,7 @@ export function useOpenCode() {
     new Map()
   );
   const orchestratorRef = useRef<Map<number, Orchestrator>>(new Map());
+  const analyzeWorkerResultsRef = useRef<((uiSessionId: number) => Promise<void>) | null>(null);
 
   const updateWorker = useCallback(
     (
@@ -121,6 +122,28 @@ export function useOpenCode() {
                 ? [...w.output, w.streamingContent]
                 : w.output,
             }));
+            
+                // Check if all workers are done and trigger analysis
+            setState((prev) => {
+              const session = prev.sessions.find((s) => s.id === mapping.uiSessionId);
+              if (session) {
+                const updatedWorkers = session.workers.map((w) =>
+                  w.id === mapping.workerId
+                    ? { ...w, state: 'complete' as const }
+                    : w
+                );
+                const allDone = updatedWorkers.every(
+                  (w) => w.state === 'complete' || w.state === 'error'
+                );
+                if (allDone && updatedWorkers.length > 0) {
+                  // Trigger analysis asynchronously via ref
+                  setTimeout(() => {
+                    analyzeWorkerResultsRef.current?.(mapping.uiSessionId);
+                  }, 100);
+                }
+              }
+              return prev;
+            });
           }
           break;
         }
@@ -494,6 +517,122 @@ export function useOpenCode() {
     }));
   }, []);
 
+  const spawnFollowUpWorkers = useCallback(
+    async (uiSessionId: number, plan: TaskPlan, idOffset: number) => {
+      const currentModel = state.currentModel;
+      
+      for (const task of plan.tasks) {
+        const workerId = idOffset + task.id;
+        const worker: Worker = {
+          id: workerId,
+          description: task.description,
+          sessionId: undefined,
+          state: 'starting',
+          output: [],
+          streamingContent: '',
+          toolHistory: [],
+        };
+
+        setState((prev) => ({
+          ...prev,
+          sessions: prev.sessions.map((s) =>
+            s.id === uiSessionId ? { ...s, workers: [...s.workers, worker] } : s
+          ),
+        }));
+
+        (async () => {
+          try {
+            const session = await api.createSession(`Worker ${workerId}: ${task.description.slice(0, 30)}`);
+
+            sessionIdMapRef.current.set(session.id, {
+              uiSessionId,
+              workerId,
+            });
+
+            updateWorker(uiSessionId, workerId, (w) => ({
+              ...w,
+              sessionId: session.id,
+            }));
+
+            await api.sendMessageAsync(session.id, task.prompt, currentModel || undefined);
+
+            updateWorker(uiSessionId, workerId, (w) => ({
+              ...w,
+              state: 'running',
+            }));
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            updateWorker(uiSessionId, workerId, (w) => ({
+              ...w,
+              state: 'error',
+              output: [...w.output, `Error: ${errorMsg}`],
+            }));
+          }
+        })();
+      }
+    },
+    [state.currentModel, updateWorker]
+  );
+
+  const analyzeWorkerResults = useCallback(
+    async (uiSessionId: number) => {
+      const session = state.sessions.find((s) => s.id === uiSessionId);
+      if (!session || !session.orchestratorSessionId) {
+        return;
+      }
+
+      const allDone = session.workers.every(
+        (w) => w.state === 'complete' || w.state === 'error'
+      );
+      if (!allDone || session.workers.length === 0) {
+        return;
+      }
+
+      const orchestrator = orchestratorRef.current.get(uiSessionId);
+      if (!orchestrator) {
+        return;
+      }
+
+      addOrchestratorLog('Analyzing worker results for follow-up tasks...');
+
+      const workerResults: WorkerResult[] = session.workers.map((w) => ({
+        workerId: w.id,
+        description: w.description,
+        success: w.state === 'complete',
+        output: w.streamingContent || w.output.join('\n'),
+      }));
+
+      const originalRequest = session.originalRequest || '';
+      const idOffset = Math.max(...session.workers.map((w) => w.id), 0);
+
+      try {
+        const plan = await orchestrator.analyzeResults(originalRequest, workerResults);
+
+        for (const log of orchestrator.getLogs()) {
+          addOrchestratorLog(log.message);
+        }
+
+        if (plan.complete || plan.tasks.length === 0) {
+          addOrchestratorLog(`Orchestrator: Task complete. ${plan.reasoning}`);
+          addSessionMessage(`Orchestrator: ${plan.reasoning}`, false);
+        } else {
+          addOrchestratorLog(`Orchestrator: ${plan.tasks.length} follow-up task(s) needed - ${plan.reasoning}`);
+          addSessionMessage(`Follow-up: ${plan.reasoning}`, false);
+          addSessionMessage(`Spawning ${plan.tasks.length} follow-up worker(s)...`, false);
+
+          await spawnFollowUpWorkers(uiSessionId, plan, idOffset);
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        addOrchestratorLog(`Analysis failed: ${errorMsg}`);
+      }
+    },
+    [state.sessions, addOrchestratorLog, addSessionMessage, spawnFollowUpWorkers]
+  );
+
+  // Keep ref in sync with the latest callback
+  analyzeWorkerResultsRef.current = analyzeWorkerResults;
+
   const handleInput = useCallback(
     async (input: string) => {
       const cmd = parseSlashCommand(input);
@@ -557,6 +696,16 @@ export function useOpenCode() {
         }
 
         addOrchestratorLog(`Task plan: ${plan.tasks.length} task(s) - ${plan.reasoning}`);
+
+        // Store the original request for analysis
+        setState((prev) => ({
+          ...prev,
+          sessions: prev.sessions.map((s) =>
+            s.id === state.activeSessionId
+              ? { ...s, originalRequest: input }
+              : s
+          ),
+        }));
 
         for (const task of plan.tasks) {
           const workerId = idOffset + task.id;
