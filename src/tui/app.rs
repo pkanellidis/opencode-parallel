@@ -74,6 +74,8 @@ pub struct App {
     pub selection: Option<TextSelection>,
     /// Content lines for the main view (used for selection/copy).
     pub content_lines: Vec<String>,
+    /// X-offset of the content area on screen (for mapping selection columns).
+    pub content_area_x: u16,
     /// Currently selected model (provider/model).
     pub current_model: Option<String>,
 }
@@ -114,6 +116,7 @@ impl App {
             logs_scroll_state: ScrollState::new(),
             selection: None,
             content_lines: Vec::new(),
+            content_area_x: 0,
             current_model: None,
         }
     }
@@ -227,21 +230,28 @@ impl App {
         }
 
         let (start, end) = sel.normalized();
+        let offset_x = self.content_area_x;
         let mut lines = Vec::new();
 
         for row in start.row..=end.row {
             if let Some(line) = self.content_lines.get(row as usize) {
-                let line_len = line.len() as u16;
-                let col_start = if row == start.row { start.col } else { 0 };
-                let col_end = if row == end.row {
-                    end.col.min(line_len)
+                let chars: Vec<char> = line.chars().collect();
+                let char_len = chars.len() as u16;
+                let col_start = if row == start.row {
+                    start.col.saturating_sub(offset_x)
                 } else {
-                    line_len
+                    0
+                };
+                let col_end = if row == end.row {
+                    end.col.saturating_sub(offset_x).min(char_len)
+                } else {
+                    char_len
                 };
 
-                if col_start < col_end && (col_start as usize) < line.len() {
-                    let end_idx = (col_end as usize).min(line.len());
-                    lines.push(line[col_start as usize..end_idx].to_string());
+                if col_start < col_end && (col_start as usize) < chars.len() {
+                    let end_idx = (col_end as usize).min(chars.len());
+                    let selected: String = chars[col_start as usize..end_idx].iter().collect();
+                    lines.push(selected);
                 }
             }
         }
