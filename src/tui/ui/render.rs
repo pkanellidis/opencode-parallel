@@ -2,7 +2,7 @@
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{
         Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -65,7 +65,8 @@ fn wrap_text(text: &str, width: usize, indent: &str) -> Vec<String> {
 
 /// Calculate the height needed for the input box based on content.
 fn calculate_input_height(app: &App, available_width: u16) -> u16 {
-    let line_count = app.textarea.lines().len() as u16;
+    let lines = app.textarea.lines();
+    let line_count = lines.len() as u16;
 
     let content_width = available_width.saturating_sub(4) as usize;
     if content_width == 0 {
@@ -73,7 +74,7 @@ fn calculate_input_height(app: &App, available_width: u16) -> u16 {
     }
 
     let mut wrapped_lines: u16 = 0;
-    for line in app.textarea.lines() {
+    for line in lines {
         let line_len = line.chars().count();
         if line_len == 0 {
             wrapped_lines += 1;
@@ -836,20 +837,20 @@ fn render_input_box(f: &mut Frame, app: &mut App, area: Rect) {
         height: input_area_height,
     };
 
-    // Configure and render the textarea
-    app.textarea.set_block(Block::default());
-    app.textarea.set_cursor_style(if is_active {
+    // Configure and render the textarea widget
+    app.textarea.textarea.set_block(Block::default());
+    app.textarea.textarea.set_cursor_style(if is_active {
         Style::default().fg(BG_PRIMARY).bg(ACCENT)
     } else {
         Style::default()
     });
-    app.textarea.set_style(if is_active {
+    app.textarea.textarea.set_style(if is_active {
         Style::default().fg(TEXT_PRIMARY).bg(bg_color)
     } else {
         Style::default().fg(TEXT_SECONDARY).bg(bg_color)
     });
 
-    f.render_widget(&app.textarea, input_area);
+    f.render_widget(app.textarea.widget(), input_area);
 
     // Status area at the bottom of the input box
     let status_area = Rect {

@@ -10,6 +10,7 @@ use crate::utils::{extract_question_text, format_tool_display};
 use super::app::App;
 use super::commands::{parse_slash_command, SlashCommand};
 use super::messages::{AppMessage, ModelOption, PendingPermission};
+use super::textarea::TextAreaAction;
 use super::worker::{Worker, WorkerState};
 
 /// Handle mouse events for scrolling and text selection.
@@ -163,45 +164,61 @@ async fn handle_input_mode(
     server: &OpenCodeServer,
     tx: &Sender<AppMessage>,
 ) {
-    use crossterm::event::Event;
-    use tui_textarea::Input;
-
-    match key.code {
-        KeyCode::Esc => {
-            if app.show_autocomplete {
+    if app.show_autocomplete {
+        match key.code {
+            KeyCode::Esc => {
                 app.show_autocomplete = false;
-            } else {
-                app.input_mode = false;
+                return;
             }
+            KeyCode::Down => {
+                app.autocomplete_next();
+                return;
+            }
+            KeyCode::Up => {
+                app.autocomplete_prev();
+                return;
+            }
+            KeyCode::Tab | KeyCode::Enter => {
+                if !app.get_current_suggestions().is_empty() {
+                    app.apply_autocomplete();
+                    return;
+                }
+            }
+            _ => {}
         }
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::ALT) => {
-            app.textarea.insert_newline();
-        }
-        KeyCode::Enter => {
-            if app.show_autocomplete && !app.get_current_suggestions().is_empty() {
-                app.apply_autocomplete();
-            } else if !app.input_is_empty() {
-                let message = app.input();
-                app.clear_input();
+    }
+
+    let action = app.textarea.handle_key(key);
+
+    match action {
+        TextAreaAction::Submit => {
+            if !app.input_is_empty() {
+                let message = app.submit_input();
                 app.show_autocomplete = false;
                 app.autocomplete_index = 0;
                 handle_submit_input(app, message, server, tx).await;
             }
         }
-        KeyCode::Tab => {
-            if app.show_autocomplete && !app.get_current_suggestions().is_empty() {
-                app.apply_autocomplete();
-            } else if app.input_starts_with("/") {
-                app.show_autocomplete = true;
-                app.autocomplete_index = 0;
-            }
+        TextAreaAction::Escape => {
+            app.input_mode = false;
         }
-        KeyCode::Down if app.show_autocomplete => app.autocomplete_next(),
-        KeyCode::Up if app.show_autocomplete => app.autocomplete_prev(),
-        _ => {
-            app.textarea.input(Input::from(Event::Key(key)));
+        TextAreaAction::Clear => {
+            app.clear_input();
+            app.show_autocomplete = false;
+            app.autocomplete_index = 0;
+        }
+        TextAreaAction::HistoryPrevious => {
+            app.textarea.history_previous();
+        }
+        TextAreaAction::HistoryNext => {
+            app.textarea.history_next();
+        }
+        TextAreaAction::Continue => {
             app.autocomplete_index = 0;
             app.show_autocomplete = app.input_starts_with("/");
+            if app.show_autocomplete && key.code == KeyCode::Tab {
+                app.autocomplete_index = 0;
+            }
         }
     }
 }
@@ -392,7 +409,7 @@ async fn handle_slash_command(
                 .push(("  /model         - Select model".to_string(), false));
             session
                 .messages
-                .push(("  /reply #N msg  - Reply to worker".to_string(), false));
+                .push(("  /reply #N [msg] - Reply/continue worker".to_string(), false));
             session
                 .messages
                 .push(("  /stop          - Stop running workers".to_string(), false));
@@ -533,17 +550,18 @@ async fn handle_slash_command(
             if let Some(worker) = session.workers.iter_mut().find(|w| w.id == worker_id) {
                 if worker.state == WorkerState::WaitingForInput {
                     if let Some(request_id) = worker.pending_question_request_id.clone() {
+                        let msg = reply_message.clone().unwrap_or_default();
                         worker.state = WorkerState::Running;
                         worker.pending_question = None;
                         worker.pending_question_request_id = None;
                         session
                             .messages
-                            .push((format!("[To #{}] {}", worker_id, reply_message), true));
+                            .push((format!("[To #{}] {}", worker_id, msg), true));
 
                         let server_clone = server.clone();
                         let tx_clone = tx.clone();
                         tokio::spawn(async move {
-                            let answers = vec![vec![reply_message]];
+                            let answers = vec![vec![msg]];
                             if let Err(e) =
                                 server_clone.reply_to_question(&request_id, answers).await
                             {
@@ -553,9 +571,41 @@ async fn handle_slash_command(
                             }
                         });
                     }
+                } else if let Some(opencode_session_id) = worker.session_id.clone() {
+                    if let Some(msg) = reply_message.clone() {
+                        worker.state = WorkerState::Running;
+                        worker.streaming_content.clear();
+                        worker.current_tool = None;
+                        session
+                            .messages
+                            .push((format!("[To #{}] {}", worker_id, msg), true));
+
+                        let server_clone = server.clone();
+                        let tx_clone = tx.clone();
+                        let current_model = app.current_model.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = server_clone
+                                .send_message_async_with_model(
+                                    &opencode_session_id,
+                                    &msg,
+                                    current_model.as_deref(),
+                                )
+                                .await
+                            {
+                                let _ = tx_clone
+                                    .send(AppMessage::Error(format!("Continue failed: {}", e)))
+                                    .await;
+                            }
+                        });
+                    } else {
+                        session.messages.push((
+                            format!("Worker #{} requires a message to continue", worker_id),
+                            false,
+                        ));
+                    }
                 } else {
                     session.messages.push((
-                        format!("Worker #{} not waiting for input", worker_id),
+                        format!("Worker #{} has no session to continue", worker_id),
                         false,
                     ));
                 }

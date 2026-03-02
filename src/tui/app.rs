@@ -2,12 +2,12 @@
 
 use crate::orchestrator::Orchestrator;
 use crate::server::OpenCodeServer;
-use tui_textarea::TextArea;
 
 use super::commands::{get_suggestions, CommandSuggestion};
 use super::messages::{ModelOption, PendingPermission};
 use super::selection::TextSelection;
 use super::session::Session;
+use super::textarea::EnhancedTextArea;
 
 /// Main application state.
 pub struct App {
@@ -23,8 +23,8 @@ pub struct App {
     pub current_session: usize,
     /// Next session ID to assign.
     pub next_session_id: usize,
-    /// Text area for multiline input.
-    pub textarea: TextArea<'static>,
+    /// Enhanced text area for multiline input with opencode-style keybindings.
+    pub textarea: EnhancedTextArea,
     /// Whether we're in input mode.
     pub input_mode: bool,
     /// Orchestrator debug logs.
@@ -80,14 +80,13 @@ impl App {
     pub fn new(server: OpenCodeServer) -> Self {
         let orchestrator = Orchestrator::new(server.clone());
         let initial_session = Session::new(0, "Session 1".to_string());
-        let textarea = Self::create_textarea();
         Self {
             server,
             orchestrator,
             sessions: vec![initial_session],
             current_session: 0,
             next_session_id: 1,
-            textarea,
+            textarea: EnhancedTextArea::new(),
             input_mode: true,
             orchestrator_logs: Vec::new(),
             logs_scroll: 0,
@@ -115,48 +114,37 @@ impl App {
         }
     }
 
-    /// Creates a new textarea with proper styling.
-    fn create_textarea() -> TextArea<'static> {
-        use ratatui::style::{Color, Style};
-        let mut textarea = TextArea::default();
-        textarea.set_cursor_line_style(Style::default());
-        textarea.set_placeholder_text("Press 'i' to enter a task...");
-        textarea.set_placeholder_style(Style::default().fg(Color::Rgb(102, 102, 102)));
-        textarea
-    }
-
     /// Returns the current input text (all lines joined).
     pub fn input(&self) -> String {
-        self.textarea.lines().join("\n")
+        self.textarea.input()
     }
 
     /// Clears the input textarea.
     pub fn clear_input(&mut self) {
-        self.textarea = Self::create_textarea();
+        self.textarea.clear();
     }
 
     /// Returns whether the input is empty.
     pub fn input_is_empty(&self) -> bool {
-        self.textarea.lines().iter().all(|l| l.is_empty())
+        self.textarea.is_empty()
     }
 
     /// Returns whether the input starts with a given prefix.
     pub fn input_starts_with(&self, prefix: &str) -> bool {
-        self.textarea
-            .lines()
-            .first()
-            .map_or(false, |l| l.starts_with(prefix))
+        self.textarea.starts_with(prefix)
     }
 
     /// Sets the input text.
     pub fn set_input(&mut self, text: &str) {
-        self.textarea = Self::create_textarea();
-        for (i, line) in text.lines().enumerate() {
-            if i > 0 {
-                self.textarea.insert_newline();
-            }
-            self.textarea.insert_str(line);
-        }
+        self.textarea.set_input(text);
+    }
+
+    /// Adds the current input to history before clearing.
+    pub fn submit_input(&mut self) -> String {
+        let input = self.input();
+        self.textarea.add_to_history(input.clone());
+        self.clear_input();
+        input
     }
 
     /// Sets the current model display string.

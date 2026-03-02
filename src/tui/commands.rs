@@ -29,8 +29,8 @@ pub enum SlashCommand {
     ModelSelect,
     /// Set model directly (provider, model).
     ModelSet(String, String),
-    /// Reply to a worker's question (worker_id, message).
-    Reply(u32, String),
+    /// Reply to a worker's question or continue conversation (worker_id, optional message).
+    Reply(u32, Option<String>),
     /// Show current config.
     Config,
     /// Open stop worker selector.
@@ -79,7 +79,7 @@ pub const COMMAND_SUGGESTIONS: &[CommandSuggestion] = &[
     },
     CommandSuggestion {
         command: "/reply",
-        description: "Reply to worker (/reply #N message)",
+        description: "Reply to worker (/reply #N [message])",
     },
     CommandSuggestion {
         command: "/projects",
@@ -195,19 +195,25 @@ pub fn parse_slash_command(input: &str) -> Option<SlashCommand> {
         "stop" | "s" | "kill" | "cancel" => Some(SlashCommand::Stop),
 
         "reply" | "r" => {
-            if parts.len() > 2 {
+            if parts.len() >= 2 {
                 let worker_str = parts[1].trim_start_matches('#');
                 if let Ok(worker_id) = worker_str.parse::<u32>() {
-                    let message = parts[2..].join(" ");
+                    let message = if parts.len() > 2 {
+                        Some(parts[2..].join(" "))
+                    } else {
+                        None
+                    };
                     Some(SlashCommand::Reply(worker_id, message))
                 } else {
                     Some(SlashCommand::Unknown(
-                        "reply requires worker number (e.g., /reply #1 yes)".to_string(),
+                        "reply requires worker number (e.g., /reply #1 or /reply #1 message)"
+                            .to_string(),
                     ))
                 }
             } else {
                 Some(SlashCommand::Unknown(
-                    "reply requires worker number and message (e.g., /reply #1 yes)".to_string(),
+                    "reply requires worker number (e.g., /reply #1 or /reply #1 message)"
+                        .to_string(),
                 ))
             }
         }
@@ -374,15 +380,31 @@ mod tests {
         fn parses_reply() {
             assert_eq!(
                 parse_slash_command("/reply #1 yes please"),
-                Some(SlashCommand::Reply(1, "yes please".to_string()))
+                Some(SlashCommand::Reply(1, Some("yes please".to_string())))
             );
             assert_eq!(
                 parse_slash_command("/reply 2 no"),
-                Some(SlashCommand::Reply(2, "no".to_string()))
+                Some(SlashCommand::Reply(2, Some("no".to_string())))
             );
             assert_eq!(
                 parse_slash_command("/r #3 ok"),
-                Some(SlashCommand::Reply(3, "ok".to_string()))
+                Some(SlashCommand::Reply(3, Some("ok".to_string())))
+            );
+        }
+
+        #[test]
+        fn parses_reply_without_message() {
+            assert_eq!(
+                parse_slash_command("/reply #1"),
+                Some(SlashCommand::Reply(1, None))
+            );
+            assert_eq!(
+                parse_slash_command("/reply 2"),
+                Some(SlashCommand::Reply(2, None))
+            );
+            assert_eq!(
+                parse_slash_command("/r #3"),
+                Some(SlashCommand::Reply(3, None))
             );
         }
 
@@ -390,10 +412,6 @@ mod tests {
         fn parses_reply_invalid() {
             assert!(matches!(
                 parse_slash_command("/reply"),
-                Some(SlashCommand::Unknown(_))
-            ));
-            assert!(matches!(
-                parse_slash_command("/reply #1"),
                 Some(SlashCommand::Unknown(_))
             ));
             assert!(matches!(

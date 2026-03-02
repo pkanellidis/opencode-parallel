@@ -7,6 +7,7 @@ pub mod commands;
 pub mod messages;
 pub mod selection;
 pub mod session;
+pub mod textarea;
 pub mod ui;
 pub mod worker;
 
