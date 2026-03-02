@@ -2,6 +2,7 @@
 
 use crate::orchestrator::Orchestrator;
 use crate::server::OpenCodeServer;
+use tui_textarea::TextArea;
 
 use super::commands::{get_suggestions, CommandSuggestion};
 use super::messages::{ModelOption, PendingPermission};
@@ -22,10 +23,8 @@ pub struct App {
     pub current_session: usize,
     /// Next session ID to assign.
     pub next_session_id: usize,
-    /// Current input text.
-    pub input: String,
-    /// Cursor position in the input.
-    pub cursor_pos: usize,
+    /// Text area for multiline input.
+    pub textarea: TextArea<'static>,
     /// Whether we're in input mode.
     pub input_mode: bool,
     /// Orchestrator debug logs.
@@ -60,6 +59,12 @@ pub struct App {
     pub show_permission_dialog: bool,
     /// Selected permission option index.
     pub permission_selector_index: usize,
+    /// Whether to show the stop worker selector.
+    pub show_stop_selector: bool,
+    /// Selected stop worker indices (for multi-select).
+    pub stop_selector_selections: Vec<usize>,
+    /// Cursor position in stop selector.
+    pub stop_selector_cursor: usize,
     /// Scroll position in main content area.
     pub main_scroll: usize,
     /// Current text selection (for copy).
@@ -75,14 +80,14 @@ impl App {
     pub fn new(server: OpenCodeServer) -> Self {
         let orchestrator = Orchestrator::new(server.clone());
         let initial_session = Session::new(0, "Session 1".to_string());
+        let textarea = Self::create_textarea();
         Self {
             server,
             orchestrator,
             sessions: vec![initial_session],
             current_session: 0,
             next_session_id: 1,
-            input: String::new(),
-            cursor_pos: 0,
+            textarea,
             input_mode: true,
             orchestrator_logs: Vec::new(),
             logs_scroll: 0,
@@ -100,10 +105,57 @@ impl App {
             pending_permissions: Vec::new(),
             show_permission_dialog: false,
             permission_selector_index: 0,
+            show_stop_selector: false,
+            stop_selector_selections: Vec::new(),
+            stop_selector_cursor: 0,
             main_scroll: 0,
             selection: None,
             content_lines: Vec::new(),
             current_model: None,
+        }
+    }
+
+    /// Creates a new textarea with proper styling.
+    fn create_textarea() -> TextArea<'static> {
+        use ratatui::style::{Color, Style};
+        let mut textarea = TextArea::default();
+        textarea.set_cursor_line_style(Style::default());
+        textarea.set_placeholder_text("Press 'i' to enter a task...");
+        textarea.set_placeholder_style(Style::default().fg(Color::Rgb(102, 102, 102)));
+        textarea
+    }
+
+    /// Returns the current input text (all lines joined).
+    pub fn input(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
+    /// Clears the input textarea.
+    pub fn clear_input(&mut self) {
+        self.textarea = Self::create_textarea();
+    }
+
+    /// Returns whether the input is empty.
+    pub fn input_is_empty(&self) -> bool {
+        self.textarea.lines().iter().all(|l| l.is_empty())
+    }
+
+    /// Returns whether the input starts with a given prefix.
+    pub fn input_starts_with(&self, prefix: &str) -> bool {
+        self.textarea
+            .lines()
+            .first()
+            .map_or(false, |l| l.starts_with(prefix))
+    }
+
+    /// Sets the input text.
+    pub fn set_input(&mut self, text: &str) {
+        self.textarea = Self::create_textarea();
+        for (i, line) in text.lines().enumerate() {
+            if i > 0 {
+                self.textarea.insert_newline();
+            }
+            self.textarea.insert_str(line);
         }
     }
 
@@ -236,8 +288,9 @@ impl App {
 
     /// Returns command suggestions for the current input.
     pub fn get_current_suggestions(&self) -> Vec<&'static CommandSuggestion> {
-        if self.input.starts_with('/') {
-            get_suggestions(&self.input)
+        let input = self.input();
+        if input.starts_with('/') {
+            get_suggestions(&input)
         } else {
             vec![]
         }
@@ -247,8 +300,8 @@ impl App {
     pub fn apply_autocomplete(&mut self) {
         let suggestions = self.get_current_suggestions();
         if !suggestions.is_empty() && self.autocomplete_index < suggestions.len() {
-            self.input = suggestions[self.autocomplete_index].command.to_string();
-            self.cursor_pos = self.input.chars().count();
+            let command = suggestions[self.autocomplete_index].command.to_string();
+            self.set_input(&command);
             self.show_autocomplete = false;
         }
     }
@@ -292,9 +345,56 @@ impl App {
         self.show_logs
             || self.show_model_selector
             || self.show_permission_dialog
+            || self.show_stop_selector
             || self.confirm_delete
             || self.confirm_clear_all
             || self.confirm_delete_session
+    }
+
+    /// Returns running (non-terminal) workers in the current session.
+    pub fn get_running_workers(&self) -> Vec<(usize, &super::worker::Worker)> {
+        self.current_session()
+            .workers
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| !w.state.is_terminal())
+            .collect()
+    }
+
+    /// Toggles a worker selection in the stop selector.
+    pub fn toggle_stop_selection(&mut self, index: usize) {
+        if self.stop_selector_selections.contains(&index) {
+            self.stop_selector_selections.retain(|&i| i != index);
+        } else {
+            self.stop_selector_selections.push(index);
+        }
+    }
+
+    /// Moves the stop selector cursor down.
+    pub fn stop_selector_next(&mut self) {
+        let running_count = self.get_running_workers().len();
+        if running_count > 0 {
+            self.stop_selector_cursor = (self.stop_selector_cursor + 1) % running_count;
+        }
+    }
+
+    /// Moves the stop selector cursor up.
+    pub fn stop_selector_prev(&mut self) {
+        let running_count = self.get_running_workers().len();
+        if running_count > 0 {
+            self.stop_selector_cursor = if self.stop_selector_cursor == 0 {
+                running_count - 1
+            } else {
+                self.stop_selector_cursor - 1
+            };
+        }
+    }
+
+    /// Resets the stop selector state.
+    pub fn reset_stop_selector(&mut self) {
+        self.show_stop_selector = false;
+        self.stop_selector_selections.clear();
+        self.stop_selector_cursor = 0;
     }
 }
 
@@ -383,7 +483,7 @@ mod tests {
     #[test]
     fn autocomplete_cycles() {
         let mut app = create_test_app();
-        app.input = "/".to_string();
+        app.set_input("/");
         let suggestion_count = app.get_current_suggestions().len();
 
         app.autocomplete_next();
@@ -397,10 +497,10 @@ mod tests {
     #[test]
     fn apply_autocomplete_sets_input() {
         let mut app = create_test_app();
-        app.input = "/he".to_string();
+        app.set_input("/he");
         app.autocomplete_index = 0;
         app.apply_autocomplete();
-        assert_eq!(app.input, "/help");
+        assert_eq!(app.input(), "/help");
     }
 
     #[test]

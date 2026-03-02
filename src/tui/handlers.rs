@@ -67,6 +67,8 @@ pub async fn handle_key_event(
         handle_permission_dialog(app, key, server, tx).await;
     } else if app.show_model_selector {
         handle_model_selector(app, key, server, tx).await;
+    } else if app.show_stop_selector {
+        handle_stop_selector(app, key);
     } else if app.confirm_delete {
         handle_confirm_delete(app, key);
     } else if app.confirm_clear_all {
@@ -161,6 +163,9 @@ async fn handle_input_mode(
     server: &OpenCodeServer,
     tx: &Sender<AppMessage>,
 ) {
+    use crossterm::event::Event;
+    use tui_textarea::Input;
+
     match key.code {
         KeyCode::Esc => {
             if app.show_autocomplete {
@@ -169,13 +174,15 @@ async fn handle_input_mode(
                 app.input_mode = false;
             }
         }
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::ALT) => {
+            app.textarea.insert_newline();
+        }
         KeyCode::Enter => {
             if app.show_autocomplete && !app.get_current_suggestions().is_empty() {
                 app.apply_autocomplete();
-            } else if !app.input.is_empty() {
-                let message = app.input.clone();
-                app.input.clear();
-                app.cursor_pos = 0;
+            } else if !app.input_is_empty() {
+                let message = app.input();
+                app.clear_input();
                 app.show_autocomplete = false;
                 app.autocomplete_index = 0;
                 handle_submit_input(app, message, server, tx).await;
@@ -184,54 +191,18 @@ async fn handle_input_mode(
         KeyCode::Tab => {
             if app.show_autocomplete && !app.get_current_suggestions().is_empty() {
                 app.apply_autocomplete();
-            } else if app.input.starts_with('/') {
+            } else if app.input_starts_with("/") {
                 app.show_autocomplete = true;
                 app.autocomplete_index = 0;
             }
         }
         KeyCode::Down if app.show_autocomplete => app.autocomplete_next(),
         KeyCode::Up if app.show_autocomplete => app.autocomplete_prev(),
-        KeyCode::Left => {
-            if app.cursor_pos > 0 {
-                app.cursor_pos -= 1;
-            }
-        }
-        KeyCode::Right => {
-            if app.cursor_pos < app.input.chars().count() {
-                app.cursor_pos += 1;
-            }
-        }
-        KeyCode::Home => app.cursor_pos = 0,
-        KeyCode::End => app.cursor_pos = app.input.chars().count(),
-        KeyCode::Backspace => {
-            if app.cursor_pos > 0 {
-                let mut chars: Vec<char> = app.input.chars().collect();
-                chars.remove(app.cursor_pos - 1);
-                app.input = chars.into_iter().collect();
-                app.cursor_pos -= 1;
-            }
+        _ => {
+            app.textarea.input(Input::from(Event::Key(key)));
             app.autocomplete_index = 0;
-            app.show_autocomplete = app.input.starts_with('/');
+            app.show_autocomplete = app.input_starts_with("/");
         }
-        KeyCode::Delete => {
-            let char_count = app.input.chars().count();
-            if app.cursor_pos < char_count {
-                let mut chars: Vec<char> = app.input.chars().collect();
-                chars.remove(app.cursor_pos);
-                app.input = chars.into_iter().collect();
-            }
-            app.autocomplete_index = 0;
-            app.show_autocomplete = app.input.starts_with('/');
-        }
-        KeyCode::Char(c) => {
-            let mut chars: Vec<char> = app.input.chars().collect();
-            chars.insert(app.cursor_pos, c);
-            app.input = chars.into_iter().collect();
-            app.cursor_pos += 1;
-            app.autocomplete_index = 0;
-            app.show_autocomplete = app.input.starts_with('/');
-        }
-        _ => {}
     }
 }
 
@@ -422,6 +393,9 @@ async fn handle_slash_command(
             session
                 .messages
                 .push(("  /reply #N msg  - Reply to worker".to_string(), false));
+            session
+                .messages
+                .push(("  /stop          - Stop running workers".to_string(), false));
             session
                 .messages
                 .push(("  /clear         - Clear messages".to_string(), false));
@@ -676,6 +650,20 @@ async fn handle_slash_command(
                 .messages
                 .push((format!("Unknown: /{}", cmd), false));
         }
+        SlashCommand::Stop => {
+            let running_count = app.get_running_workers().len();
+            if running_count == 0 {
+                app.current_session_mut()
+                    .messages
+                    .push(("No running workers to stop".to_string(), false));
+                app.status = "No running workers".to_string();
+            } else {
+                app.show_stop_selector = true;
+                app.stop_selector_cursor = 0;
+                app.stop_selector_selections.clear();
+                app.status = format!("Select workers to stop ({} running)", running_count);
+            }
+        }
     }
 }
 
@@ -862,6 +850,69 @@ fn handle_confirm_delete_session(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
             app.confirm_delete_session = false;
+            app.status = "Cancelled".to_string();
+        }
+        _ => {}
+    }
+}
+
+fn handle_stop_selector(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.stop_selector_prev();
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.stop_selector_next();
+        }
+        KeyCode::Char(' ') => {
+            let running_workers = app.get_running_workers();
+            if let Some((worker_idx, _)) = running_workers.get(app.stop_selector_cursor) {
+                app.toggle_stop_selection(*worker_idx);
+            }
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            let running_indices: Vec<usize> = app
+                .get_running_workers()
+                .iter()
+                .map(|(idx, _)| *idx)
+                .collect();
+            if app.stop_selector_selections.len() == running_indices.len() {
+                app.stop_selector_selections.clear();
+            } else {
+                app.stop_selector_selections = running_indices;
+            }
+        }
+        KeyCode::Enter => {
+            if !app.stop_selector_selections.is_empty() {
+                let mut stopped_ids = Vec::new();
+                let mut indices_to_stop: Vec<usize> = app.stop_selector_selections.clone();
+                indices_to_stop.sort();
+                indices_to_stop.reverse();
+
+                for &idx in &indices_to_stop {
+                    if let Some(worker) = app.current_session_mut().workers.get_mut(idx) {
+                        stopped_ids.push(worker.id);
+                        worker.state = WorkerState::Error;
+                        worker.output.push("Interrupted by user".to_string());
+                    }
+                }
+
+                let count = stopped_ids.len();
+                let ids_str: String = stopped_ids
+                    .iter()
+                    .map(|id| format!("#{}", id))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                app.current_session_mut()
+                    .messages
+                    .push((format!("Stopped {} worker(s): {}", count, ids_str), false));
+                app.status = format!("Stopped {} worker(s)", count);
+                app.reset_stop_selector();
+            }
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.reset_stop_selector();
             app.status = "Cancelled".to_string();
         }
         _ => {}

@@ -14,7 +14,9 @@ use crate::tui::app::App;
 use crate::tui::worker::WorkerState;
 use crate::utils::truncate_str;
 
-use super::dialogs::{render_autocomplete, render_model_selector, render_permission_dialog};
+use super::dialogs::{
+    render_autocomplete, render_model_selector, render_permission_dialog, render_stop_selector,
+};
 use super::theme::*;
 
 /// Wraps text to fit within a given width, returning multiple lines.
@@ -61,6 +63,29 @@ fn wrap_text(text: &str, width: usize, indent: &str) -> Vec<String> {
     lines
 }
 
+/// Calculate the height needed for the input box based on content.
+fn calculate_input_height(app: &App, available_width: u16) -> u16 {
+    let line_count = app.textarea.lines().len() as u16;
+
+    let content_width = available_width.saturating_sub(4) as usize;
+    if content_width == 0 {
+        return 4;
+    }
+
+    let mut wrapped_lines: u16 = 0;
+    for line in app.textarea.lines() {
+        let line_len = line.chars().count();
+        if line_len == 0 {
+            wrapped_lines += 1;
+        } else {
+            wrapped_lines += ((line_len + content_width - 1) / content_width).max(1) as u16;
+        }
+    }
+
+    let lines_needed = wrapped_lines.max(line_count).max(1);
+    (lines_needed + 3).clamp(4, 12)
+}
+
 /// Main UI rendering entry point.
 pub fn ui(f: &mut Frame, app: &mut App) {
     app.content_lines.clear();
@@ -71,12 +96,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let session = app.current_session();
     let has_workers = !session.workers.is_empty();
 
+    // Calculate dynamic input box height based on content
+    let input_box_height = calculate_input_height(app, f.area().width.saturating_sub(4));
+
     // Layout: main content area + sticky input at bottom
     let main_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),    // Main content (scrollable)
-            Constraint::Length(4), // Input box (sticky)
+            Constraint::Min(0),                   // Main content (scrollable)
+            Constraint::Length(input_box_height), // Input box (dynamic height)
         ])
         .split(f.area());
 
@@ -107,6 +135,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     render_autocomplete(f, app, main_layout[1]);
     render_model_selector(f, app);
     render_permission_dialog(f, app);
+    render_stop_selector(f, app);
 }
 
 /// Renders the landing view when no workers are active.
@@ -782,7 +811,7 @@ fn render_line_with_selection_and_color(
 }
 
 /// Renders the sticky input box at the bottom.
-fn render_input_box(f: &mut Frame, app: &App, area: Rect) {
+fn render_input_box(f: &mut Frame, app: &mut App, area: Rect) {
     let is_active = app.input_mode;
 
     let border_color = if is_active { ACCENT } else { BORDER };
@@ -797,61 +826,49 @@ fn render_input_box(f: &mut Frame, app: &App, area: Rect) {
 
     let inner = block.inner(area);
 
-    // Build input line with cursor
-    let spans = if is_active {
-        let chars: Vec<char> = app.input.chars().collect();
-        let before: String = chars[..app.cursor_pos].iter().collect();
-        let cursor_char = chars.get(app.cursor_pos).copied().unwrap_or(' ');
-        let after: String = if app.cursor_pos < chars.len() {
-            chars[app.cursor_pos + 1..].iter().collect()
-        } else {
-            String::new()
-        };
-
-        vec![
-            Span::styled("› ", Style::default().fg(ACCENT)),
-            Span::styled(before, Style::default().fg(TEXT_PRIMARY)),
-            Span::styled(
-                cursor_char.to_string(),
-                Style::default().fg(BG_PRIMARY).bg(ACCENT),
-            ),
-            Span::styled(after, Style::default().fg(TEXT_PRIMARY)),
-        ]
-    } else if app.input.is_empty() {
-        vec![Span::styled(
-            "Press 'i' to enter a task...",
-            Style::default().fg(TEXT_DIM),
-        )]
-    } else {
-        vec![
-            Span::styled("› ", Style::default().fg(TEXT_DIM)),
-            Span::styled(&app.input, Style::default().fg(TEXT_SECONDARY)),
-        ]
+    // Calculate how many lines we need for status info at the bottom
+    let status_lines = 1u16;
+    let input_area_height = inner.height.saturating_sub(status_lines);
+    let input_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: input_area_height,
     };
 
-    let input_line = Paragraph::new(Line::from(spans));
-    f.render_widget(input_line, inner);
+    // Configure and render the textarea
+    app.textarea.set_block(Block::default());
+    app.textarea.set_cursor_style(if is_active {
+        Style::default().fg(BG_PRIMARY).bg(ACCENT)
+    } else {
+        Style::default()
+    });
+    app.textarea.set_style(if is_active {
+        Style::default().fg(TEXT_PRIMARY).bg(bg_color)
+    } else {
+        Style::default().fg(TEXT_SECONDARY).bg(bg_color)
+    });
 
-    // Show current model on second line if available
-    if inner.height > 1 {
-        if let Some(ref model) = app.current_model {
-            let model_line = Paragraph::new(Line::from(vec![
-                Span::styled("Model: ", Style::default().fg(TEXT_DIM)),
-                Span::styled(model, Style::default().fg(ACCENT_SECONDARY)),
-            ]));
-            let model_area = Rect {
-                x: inner.x,
-                y: inner.y + 1,
-                width: inner.width,
-                height: 1,
-            };
-            f.render_widget(model_line, model_area);
-        }
+    f.render_widget(&app.textarea, input_area);
+
+    // Status area at the bottom of the input box
+    let status_area = Rect {
+        x: inner.x,
+        y: inner.y + input_area_height,
+        width: inner.width,
+        height: status_lines,
+    };
+
+    // Show current model on the left side of status line
+    if let Some(ref model) = app.current_model {
+        let model_text = format!("Model: {}", model);
+        let model_para = Paragraph::new(Span::styled(model_text, Style::default().fg(TEXT_DIM)));
+        f.render_widget(model_para, status_area);
     }
 
     // Status hint on right side
     let hint = if is_active {
-        "Enter to send · Esc to cancel"
+        "Enter to send · Shift+Enter for newline · Esc to cancel"
     } else {
         "i: input · l: logs · q: quit"
     };
@@ -859,8 +876,8 @@ fn render_input_box(f: &mut Frame, app: &App, area: Rect) {
     let hint_width = hint.len() as u16;
     if inner.width > hint_width + 10 {
         let hint_area = Rect {
-            x: inner.x + inner.width - hint_width - 1,
-            y: inner.y,
+            x: status_area.x + status_area.width - hint_width - 1,
+            y: status_area.y,
             width: hint_width,
             height: 1,
         };

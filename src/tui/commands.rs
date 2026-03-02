@@ -33,6 +33,8 @@ pub enum SlashCommand {
     Reply(u32, String),
     /// Show current config.
     Config,
+    /// Open stop worker selector.
+    Stop,
     /// Unknown command.
     Unknown(String),
 }
@@ -98,6 +100,10 @@ pub const COMMAND_SUGGESTIONS: &[CommandSuggestion] = &[
     CommandSuggestion {
         command: "/config",
         description: "Show current server config",
+    },
+    CommandSuggestion {
+        command: "/stop",
+        description: "Stop running workers",
     },
 ];
 
@@ -185,6 +191,8 @@ pub fn parse_slash_command(input: &str) -> Option<SlashCommand> {
         "clear" | "cls" => Some(SlashCommand::Clear),
 
         "config" | "cfg" => Some(SlashCommand::Config),
+
+        "stop" | "s" | "kill" | "cancel" => Some(SlashCommand::Stop),
 
         "reply" | "r" => {
             if parts.len() > 2 {
@@ -352,6 +360,14 @@ mod tests {
         fn parses_config() {
             assert_eq!(parse_slash_command("/config"), Some(SlashCommand::Config));
             assert_eq!(parse_slash_command("/cfg"), Some(SlashCommand::Config));
+        }
+
+        #[test]
+        fn parses_stop() {
+            assert_eq!(parse_slash_command("/stop"), Some(SlashCommand::Stop));
+            assert_eq!(parse_slash_command("/s"), Some(SlashCommand::Stop));
+            assert_eq!(parse_slash_command("/kill"), Some(SlashCommand::Stop));
+            assert_eq!(parse_slash_command("/cancel"), Some(SlashCommand::Stop));
         }
 
         #[test]

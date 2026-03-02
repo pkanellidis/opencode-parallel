@@ -197,6 +197,100 @@ pub fn render_permission_dialog(f: &mut Frame, app: &App) {
     f.render_widget(paragraph, popup_area);
 }
 
+/// Renders the stop worker selector popup.
+pub fn render_stop_selector(f: &mut Frame, app: &App) {
+    if !app.show_stop_selector {
+        return;
+    }
+
+    let running_workers = app.get_running_workers();
+    if running_workers.is_empty() {
+        return;
+    }
+
+    let area = f.area();
+    let popup_width = 60u16.min(area.width.saturating_sub(4));
+    let popup_height = (running_workers.len() + 6).min(20) as u16;
+
+    let popup_area = Rect {
+        x: (area.width.saturating_sub(popup_width)) / 2,
+        y: (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "  Select workers to stop (Space to toggle, Enter to confirm)",
+            Style::default().fg(TEXT_DIM),
+        )]),
+        Line::from(""),
+    ];
+
+    for (i, (worker_idx, worker)) in running_workers.iter().enumerate() {
+        let is_cursor = i == app.stop_selector_cursor;
+        let is_selected = app.stop_selector_selections.contains(worker_idx);
+
+        let checkbox = if is_selected { "[x]" } else { "[ ]" };
+        let cursor_marker = if is_cursor { ">" } else { " " };
+        let state_symbol = worker.state.symbol();
+
+        let bg = if is_cursor { BG_SELECTED } else { BG_PANEL };
+        let fg = if is_cursor {
+            TEXT_PRIMARY
+        } else {
+            TEXT_SECONDARY
+        };
+        let checkbox_fg = if is_selected { ACCENT } else { TEXT_DIM };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} ", cursor_marker),
+                Style::default().fg(fg).bg(bg),
+            ),
+            Span::styled(
+                format!("{} ", checkbox),
+                Style::default().fg(checkbox_fg).bg(bg),
+            ),
+            Span::styled(format!("{} ", state_symbol), Style::default().fg(fg).bg(bg)),
+            Span::styled(
+                format!("#{} {}", worker.id, truncate_str(&worker.description, 35)),
+                Style::default().fg(fg).bg(bg),
+            ),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    let selected_count = app.stop_selector_selections.len();
+    let hint = if selected_count > 0 {
+        format!(
+            "  {} selected · Enter to stop · Esc to cancel",
+            selected_count
+        )
+    } else {
+        "  Space to select · Esc to cancel".to_string()
+    };
+    lines.push(Line::from(vec![Span::styled(
+        hint,
+        Style::default().fg(TEXT_DIM),
+    )]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Stop Workers ")
+                .title_style(Style::default().fg(WARNING))
+                .border_style(Style::default().fg(WARNING))
+                .style(Style::default().bg(BG_PANEL)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(Clear, popup_area);
+    f.render_widget(paragraph, popup_area);
+}
+
 /// Renders the autocomplete popup.
 pub fn render_autocomplete(f: &mut Frame, app: &App, input_area: Rect) {
     if !app.show_autocomplete || !app.input_mode {
