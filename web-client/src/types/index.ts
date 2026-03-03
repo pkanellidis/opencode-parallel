@@ -79,12 +79,71 @@ export interface StreamEventPartUpdated {
   part: Part;
 }
 
+export interface EditToolInput {
+  filePath: string;
+  oldString: string;
+  newString: string;
+  replaceAll?: boolean;
+}
+
+export interface WriteToolInput {
+  filePath: string;
+  content: string;
+}
+
+export interface ReadToolInput {
+  filePath: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface BashToolInput {
+  command: string;
+  workdir?: string;
+  description?: string;
+  timeout?: number;
+}
+
+export interface GlobToolInput {
+  pattern: string;
+  path?: string;
+}
+
+export interface GrepToolInput {
+  pattern: string;
+  path?: string;
+  include?: string;
+}
+
+export type ToolInput =
+  | EditToolInput
+  | WriteToolInput
+  | ReadToolInput
+  | BashToolInput
+  | GlobToolInput
+  | GrepToolInput
+  | Record<string, unknown>;
+
+export interface ToolCallDetails {
+  id: string;
+  toolName: string;
+  status: 'running' | 'completed' | 'error';
+  input: ToolInput;
+  output?: string;
+  error?: string;
+  startTime: number;
+  endTime?: number;
+}
+
 export interface StreamEventToolCall {
   type: 'tool_call';
   sessionId: string;
   toolName: string;
   status: string;
   input: unknown;
+  toolCallId?: string;
+  output?: string;
+  error?: string;
 }
 
 export interface StreamEventSessionIdle {
@@ -136,6 +195,7 @@ export interface Worker {
   streamingContent: string;
   currentTool?: string;
   toolHistory: string[];
+  toolCalls: ToolCallDetails[];
   pendingQuestion?: QuestionInfo;
   pendingQuestionRequestId?: string;
   pendingPermission?: { permission: string; patterns: string[] };

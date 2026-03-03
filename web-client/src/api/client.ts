@@ -206,7 +206,10 @@ function parseSSEEvent(data: string): StreamEvent | null {
           const toolName = partData.tool || 'unknown';
           const status = partData.state?.status || 'unknown';
           const input = partData.state?.input || null;
-          return { type: 'tool_call', sessionId, toolName, status, input };
+          const toolCallId = partData.id || `${sessionId}-${Date.now()}`;
+          const output = partData.state?.output || partData.output || undefined;
+          const error = partData.state?.error || partData.error || undefined;
+          return { type: 'tool_call', sessionId, toolName, status, input, toolCallId, output, error };
         }
         return null;
       }

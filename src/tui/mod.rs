@@ -9,6 +9,7 @@ pub mod scroll;
 pub mod selection;
 pub mod session;
 pub mod textarea;
+pub mod tool_display;
 pub mod ui;
 pub mod worker;
 

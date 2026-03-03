@@ -5,6 +5,8 @@ import type {
   UISession,
   Worker,
   StreamEvent,
+  ToolCallDetails,
+  ToolInput,
 } from '../types';
 import * as api from '../api/client';
 import { parseSlashCommand, type SlashCommand, COMMAND_SUGGESTIONS } from '../utils/commands';
@@ -98,15 +100,66 @@ export function useOpenCode() {
         case 'tool_call': {
           const mapping = sessionIdMapRef.current.get(event.sessionId);
           if (mapping) {
-            updateWorker(mapping.uiSessionId, mapping.workerId, (w) => ({
-              ...w,
-              state: 'running',
-              currentTool: event.status === 'running' ? event.toolName : undefined,
-              toolHistory:
-                event.status === 'completed'
-                  ? [...w.toolHistory, event.toolName]
-                  : w.toolHistory,
-            }));
+            const toolCallId = event.toolCallId || `${event.sessionId}-${event.toolName}-${Date.now()}`;
+            
+            updateWorker(mapping.uiSessionId, mapping.workerId, (w) => {
+              const existingCallIndex = w.toolCalls.findIndex((tc) => tc.id === toolCallId);
+              let updatedToolCalls: ToolCallDetails[];
+
+              if (event.status === 'running') {
+                if (existingCallIndex === -1) {
+                  const newToolCall: ToolCallDetails = {
+                    id: toolCallId,
+                    toolName: event.toolName,
+                    status: 'running',
+                    input: event.input as ToolInput,
+                    startTime: Date.now(),
+                  };
+                  updatedToolCalls = [...w.toolCalls, newToolCall];
+                } else {
+                  updatedToolCalls = w.toolCalls;
+                }
+              } else if (event.status === 'completed' || event.status === 'error') {
+                if (existingCallIndex !== -1) {
+                  updatedToolCalls = w.toolCalls.map((tc, idx) =>
+                    idx === existingCallIndex
+                      ? {
+                          ...tc,
+                          status: event.status === 'error' ? 'error' : 'completed',
+                          output: event.output,
+                          error: event.error,
+                          endTime: Date.now(),
+                        }
+                      : tc
+                  );
+                } else {
+                  const newToolCall: ToolCallDetails = {
+                    id: toolCallId,
+                    toolName: event.toolName,
+                    status: event.status === 'error' ? 'error' : 'completed',
+                    input: event.input as ToolInput,
+                    output: event.output,
+                    error: event.error,
+                    startTime: Date.now(),
+                    endTime: Date.now(),
+                  };
+                  updatedToolCalls = [...w.toolCalls, newToolCall];
+                }
+              } else {
+                updatedToolCalls = w.toolCalls;
+              }
+
+              return {
+                ...w,
+                state: 'running',
+                currentTool: event.status === 'running' ? event.toolName : undefined,
+                toolHistory:
+                  event.status === 'completed'
+                    ? [...w.toolHistory, event.toolName]
+                    : w.toolHistory,
+                toolCalls: updatedToolCalls,
+              };
+            });
           }
           break;
         }
@@ -531,6 +584,7 @@ export function useOpenCode() {
           output: [],
           streamingContent: '',
           toolHistory: [],
+          toolCalls: [],
         };
 
         setState((prev) => ({
@@ -717,6 +771,7 @@ export function useOpenCode() {
             output: [],
             streamingContent: '',
             toolHistory: [],
+            toolCalls: [],
           };
 
           setState((prev) => ({

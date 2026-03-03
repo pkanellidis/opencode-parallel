@@ -3,6 +3,7 @@
 //! Workers are parallel task executors that run in separate OpenCode sessions.
 
 use crate::constants::SUMMARY_LINE_LIMIT;
+use crate::tui::tool_display::ToolCallInfo;
 use crate::utils::truncate_str;
 
 /// The current state of a worker.
@@ -55,8 +56,14 @@ pub struct Worker {
     pub streaming_content: String,
     /// Currently executing tool, if any.
     pub current_tool: Option<String>,
-    /// History of completed tool calls.
+    /// History of completed tool calls (simple display names).
     pub tool_history: Vec<String>,
+    /// Detailed tool call information with parameters and results.
+    pub tool_calls: Vec<ToolCallInfo>,
+    /// Currently executing tool with detailed info.
+    pub current_tool_info: Option<ToolCallInfo>,
+    /// Whether to show expanded tool details in the UI.
+    pub show_tool_details: bool,
     /// Pending question text, if waiting for input.
     pub pending_question: Option<String>,
     /// Request ID for the pending question.
@@ -75,9 +82,50 @@ impl Worker {
             streaming_content: String::new(),
             current_tool: None,
             tool_history: Vec::new(),
+            tool_calls: Vec::new(),
+            current_tool_info: None,
+            show_tool_details: true,
             pending_question: None,
             pending_question_request_id: None,
         }
+    }
+
+    /// Starts a new tool call with detailed tracking.
+    pub fn start_tool_call(&mut self, tool_name: String, parameters: serde_json::Value) {
+        let mut info = ToolCallInfo::new(tool_name, parameters);
+        info.set_running();
+        self.current_tool = Some(info.display_name.clone());
+        self.current_tool_info = Some(info);
+    }
+
+    /// Completes the current tool call and moves it to history.
+    pub fn complete_tool_call(&mut self, result: Option<crate::tui::tool_display::ToolCallResult>) {
+        if let Some(mut info) = self.current_tool_info.take() {
+            if let Some(r) = result {
+                info.set_completed(r);
+            } else {
+                info.status = crate::tui::tool_display::ToolCallStatus::Completed;
+            }
+            if !self.tool_history.iter().any(|h| h == &info.display_name) {
+                self.tool_history.push(info.display_name.clone());
+            }
+            self.tool_calls.push(info);
+        }
+        self.current_tool = None;
+    }
+
+    /// Marks the current tool call as failed.
+    pub fn fail_tool_call(&mut self, error: String) {
+        if let Some(mut info) = self.current_tool_info.take() {
+            info.set_failed(error);
+            self.tool_calls.push(info);
+        }
+        self.current_tool = None;
+    }
+
+    /// Toggles showing tool details in the UI.
+    pub fn toggle_tool_details(&mut self) {
+        self.show_tool_details = !self.show_tool_details;
     }
 
     /// Returns lines to display for this worker's output.

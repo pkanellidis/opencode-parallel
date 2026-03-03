@@ -655,24 +655,47 @@ fn render_worker_detail_panel(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let wrap_width = content_area.width.saturating_sub(2) as usize;
-    let mut display_lines: Vec<(String, Color)> = Vec::new();
+    let mut styled_lines: Vec<Line<'static>> = Vec::new();
 
-    for tool in &worker.tool_history {
-        let wrapped = wrap_text(&format!("✓ {}", tool), wrap_width, "  ");
-        for line in wrapped {
-            display_lines.push((line, SUCCESS));
+    let max_detail_lines = 10;
+
+    if worker.show_tool_details && !worker.tool_calls.is_empty() {
+        for tool_info in &worker.tool_calls {
+            styled_lines.push(tool_info.render_header());
+            for detail_line in tool_info.render_details(max_detail_lines) {
+                styled_lines.push(detail_line);
+            }
+            styled_lines.push(Line::from(""));
+        }
+    } else {
+        for tool in &worker.tool_history {
+            let wrapped = wrap_text(&format!("✓ {}", tool), wrap_width, "  ");
+            for line in wrapped {
+                styled_lines.push(Line::from(Span::styled(line, Style::default().fg(SUCCESS))));
+            }
         }
     }
 
-    if let Some(tool) = &worker.current_tool {
+    if let Some(ref tool_info) = worker.current_tool_info {
+        styled_lines.push(tool_info.render_header());
+        for detail_line in tool_info.render_details(max_detail_lines) {
+            styled_lines.push(detail_line);
+        }
+    } else if let Some(tool) = &worker.current_tool {
         let wrapped = wrap_text(&format!("⚙ {}...", tool), wrap_width, "  ");
         for line in wrapped {
-            display_lines.push((line, STATUS_RUNNING));
+            styled_lines.push(Line::from(Span::styled(
+                line,
+                Style::default().fg(STATUS_RUNNING),
+            )));
         }
     }
 
-    if !worker.tool_history.is_empty() || worker.current_tool.is_some() {
-        display_lines.push((String::new(), TEXT_PRIMARY));
+    if !worker.tool_history.is_empty()
+        || worker.current_tool.is_some()
+        || !worker.tool_calls.is_empty()
+    {
+        styled_lines.push(Line::from(""));
     }
 
     let content = if !worker.streaming_content.is_empty() {
@@ -691,9 +714,25 @@ fn render_worker_detail_panel(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 TEXT_PRIMARY
             };
-            display_lines.push((wrapped_line, color));
+            styled_lines.push(Line::from(Span::styled(
+                wrapped_line,
+                Style::default().fg(color),
+            )));
         }
     }
+
+    let display_lines: Vec<(String, Color)> = styled_lines
+        .iter()
+        .map(|line| {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let color = line
+                .spans
+                .first()
+                .and_then(|s| s.style.fg)
+                .unwrap_or(TEXT_PRIMARY);
+            (text, color)
+        })
+        .collect();
 
     let total_lines = display_lines.len();
     let visible_height = content_area.height as usize;

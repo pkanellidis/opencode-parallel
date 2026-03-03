@@ -1,5 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import type { Worker } from '../types';
+import { ToolCallList } from './ToolCallDisplay';
+import { CodeBlock } from './CodeBlock';
 
 interface WorkerCardProps {
   worker: Worker;
@@ -53,7 +55,11 @@ export function WorkerCard({
 
       <div className="worker-description">{worker.description}</div>
 
-      {worker.toolHistory.length > 0 && (
+      {worker.toolCalls.length > 0 && (
+        <ToolCallList toolCalls={worker.toolCalls} maxVisible={5} />
+      )}
+
+      {worker.toolCalls.length === 0 && worker.toolHistory.length > 0 && (
         <div className="worker-tools">
           <span className="tools-label">Tools used:</span>
           <div className="tools-list">
@@ -73,7 +79,29 @@ export function WorkerCard({
 
       {content && (
         <div className="worker-content">
-          <ReactMarkdown>{content}</ReactMarkdown>
+          <ReactMarkdown
+            components={{
+              code({ className, children, ...props }) {
+                const match = /language-(\w+)/.exec(className || '');
+                const codeString = String(children).replace(/\n$/, '');
+                if (match && codeString.includes('\n')) {
+                  return (
+                    <CodeBlock
+                      code={codeString}
+                      language={match[1]}
+                    />
+                  );
+                }
+                return (
+                  <code className={className} {...props}>
+                    {children}
+                  </code>
+                );
+              },
+            }}
+          >
+            {content}
+          </ReactMarkdown>
         </div>
       )}
 

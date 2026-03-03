@@ -17,6 +17,7 @@ pub enum StreamEvent {
         tool_name: String,
         status: String,
         input: serde_json::Value,
+        output: Option<serde_json::Value>,
     },
 
     /// A session became idle (finished processing).

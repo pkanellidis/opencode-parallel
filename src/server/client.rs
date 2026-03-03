@@ -577,12 +577,17 @@ fn parse_part_updated(parsed: &serde_json::Value, logs: &ServerLogs) -> Option<S
                 .and_then(|s| s.get("input"))
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
+            let output = part_data
+                .get("state")
+                .and_then(|s| s.get("output"))
+                .cloned();
 
             logs.log(format!(
-                "  tool={} status={} input_len={}",
+                "  tool={} status={} input_len={} has_output={}",
                 tool_name,
                 status,
-                input.to_string().len()
+                input.to_string().len(),
+                output.is_some()
             ));
 
             Some(StreamEvent::ToolCall {
@@ -590,6 +595,7 @@ fn parse_part_updated(parsed: &serde_json::Value, logs: &ServerLogs) -> Option<S
                 tool_name,
                 status,
                 input,
+                output,
             })
         }
         "step-start" => {

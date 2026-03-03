@@ -6,6 +6,7 @@ use tokio::sync::mpsc::Sender;
 use crate::constants::{LINE_SCROLL_AMOUNT, PAGE_SCROLL_LINES};
 use crate::orchestrator::Orchestrator;
 use crate::server::{OpenCodeServer, StreamEvent};
+use crate::tui::tool_display::parse_tool_result;
 use crate::utils::{extract_question_text, format_tool_display};
 
 use super::app::App;
@@ -1272,6 +1273,7 @@ async fn handle_stream_event(
             tool_name,
             status,
             input,
+            output,
         } => {
             let mut question_to_show: Option<(u32, String, String)> = None;
 
@@ -1284,6 +1286,7 @@ async fn handle_stream_event(
                     let display_name = format_tool_display(&tool_name, &input);
                     match status.as_str() {
                         "pending" | "running" => {
+                            worker.start_tool_call(tool_name.clone(), input.clone());
                             worker.current_tool = Some(display_name);
                             if tool_name == "question" && status == "running" {
                                 let extracted = extract_question_text(&input);
@@ -1296,10 +1299,20 @@ async fn handle_stream_event(
                             }
                         }
                         "completed" => {
-                            worker.current_tool = None;
+                            let tool_result =
+                                parse_tool_result(&tool_name, &input, output.as_ref());
+                            worker.complete_tool_call(tool_result);
                             if !worker.tool_history.iter().any(|h| h == &display_name) {
                                 worker.tool_history.push(display_name);
                             }
+                        }
+                        "error" | "failed" => {
+                            let error_msg = input
+                                .get("error")
+                                .and_then(|e| e.as_str())
+                                .unwrap_or("Unknown error")
+                                .to_string();
+                            worker.fail_tool_call(error_msg);
                         }
                         _ => {}
                     }
